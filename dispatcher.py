@@ -40,7 +40,7 @@ def check_job(context: CallbackContext):
         nodes = []
         for n in node_ids:
             nodes.append((n, context.bot_data['nodes'][net][n]['ip']))
-        pings = ping_many(nodes)
+        pings = ping_many(nodes, 5000)
 
         for chat_id, data in context.bot_data['chats'].items():
             for node in data['nodes'][net]:
@@ -190,10 +190,10 @@ def ping(host):
     out = subprocess.run(['fping', '-t 1000', host], stdout=subprocess.PIPE).stdout.decode('utf-8')
     return {True: 'up', False: 'down'}['alive' in out]
 
-def ping_many(nodes):
+def ping_many(nodes, timeout=1000):
     if nodes:
         ips = [node[1] for node in nodes]
-        out = subprocess.run(['fping', '-t 1000'] + ips, stdout=subprocess.PIPE).stdout.decode('utf-8')
+        out = subprocess.run(['fping', '-t ' + str(timeout)] + ips, stdout=subprocess.PIPE).stdout.decode('utf-8')
         result = []
         for line in out.split('\n')[:-1]:
             for node in nodes:
@@ -284,6 +284,7 @@ def subscribe(update: Update, context: CallbackContext):
     if context.args:
         valid_nodes = []
         unknown_nodes = []
+        duplicate_nodes = []
         for node in context.args:
             # Check first if they're already subscribed
             if not int(node) in subbed_nodes:
@@ -292,6 +293,8 @@ def subscribe(update: Update, context: CallbackContext):
                     valid_nodes.append((node, ip))
                 except KeyError:
                     unknown_nodes.append(node)
+            else:
+                duplicate_nodes.append(node)
 
         if unknown_nodes:
             context.bot.send_message(chat_id=chat_id, text='Fetching node details...')
@@ -307,12 +310,17 @@ def subscribe(update: Update, context: CallbackContext):
         if valid_nodes:
             pings = ping_many(valid_nodes)
 
+            new_subs = []
             for stat in pings:
                 node = stat[0]
                 context.bot_data['nodes'][net][node]['status'] = stat[1]
                 subbed_nodes.append(node)
+                new_subs.append(node)
 
-            context.bot.send_message(chat_id=chat_id, text='Success! You are now subscribed to node' + format_list(subbed_nodes))
+            context.bot.send_message(chat_id=chat_id, text='You have been successfully subscribed to node' + format_list(new_subs))
+
+        if duplicate_nodes:
+            context.bot.send_message(chat_id=chat_id, text='You were already subscribed to node' + format_list(duplicate_nodes))
 
         else:
             context.bot.send_message(chat_id=chat_id, text='Sorry, no valid node ids found.')
