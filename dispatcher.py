@@ -27,7 +27,7 @@ logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s
 
 def check(net, node):
     r = requests.get(get_proxy(net) + str(node) + '/status', timeout=5)
-    return r.json()
+    return r.json()['status']
 
 def check_valid(net, node):
     requests.get(get_proxy(net) + node).ok
@@ -39,31 +39,38 @@ def check_job(context: CallbackContext):
             node_ids += data['nodes'][net]
         nodes = []
         for n in node_ids:
-            nodes.append((n, context.bot_data['nodes'][net][n]['ip']))
-        pings = ping_many(nodes, 5000)
+            context.bot_data['nodes'][net][n]['previous_status'] = context.bot_data['nodes'][net][n]['status']
+            context.bot_data['nodes'][net][n]['status'] = check(net, n)
+        #     nodes.append((n, context.bot_data['nodes'][net][n]['ip']))
+        # pings = ping_many(nodes, 5000)
 
         for chat_id, data in context.bot_data['chats'].items():
             for node in data['nodes'][net]:
-                for ping in pings:
-                    if ping[0] == node:
-                        # If node has only been checked once, skip notifications
-                        try:
-                            first = context.bot_data['nodes'][net][node]['previous_status']
-                        except KeyError:
-                            context.bot_data['nodes'][net][node]['previous_status'] = context.bot_data['nodes'][net][node]['status']
-                            context.bot_data['nodes'][net][node]['status'] = ping[1]
-                            continue
+                if context.bot_data['nodes'][net][node]['previous_status'] == 'up' and context.bot_data['nodes'][net][node]['status'] == 'down':
+                    context.bot.send_message(chat_id=chat_id, text='Node {} has gone offline :('.format(node))
+                elif context.bot_data['nodes'][net][node]['previous_status'] == 'down' and context.bot_data['nodes'][net][node]['status'] == 'up':
+                    context.bot.send_message(chat_id=chat_id, text='Node {} has come back online :)'.format(node))
 
-                        second = context.bot_data['nodes'][net][node]['status']
-                        latest = ping[1]
+                # for ping in pings:
+                    # if ping[0] == node:
+                    #     # If node has only been checked once, skip notifications
+                    #     try:
+                    #         first = context.bot_data['nodes'][net][node]['previous_status']
+                    #     except KeyError:
+                    #         context.bot_data['nodes'][net][node]['previous_status'] = context.bot_data['nodes'][net][node]['status']
+                    #         context.bot_data['nodes'][net][node]['status'] = ping[1]
+                    #         continue
 
-                        context.bot_data['nodes'][net][node]['status'] = latest
-                        context.bot_data['nodes'][net][node]['previous_status'] = second
+                    #     second = context.bot_data['nodes'][net][node]['status']
+                    #     latest = ping[1]
+
+                    #     context.bot_data['nodes'][net][node]['status'] = latest
+                    #     context.bot_data['nodes'][net][node]['previous_status'] = second
                         
-                        if first == 'up' and second == 'down' and latest == 'down':
-                            context.bot.send_message(chat_id=chat_id, text='Node {} has gone offline :('.format(node))
-                        elif first == 'down' and second == 'down' and latest == 'up':
-                            context.bot.send_message(chat_id=chat_id, text='Node {} has come back online :)'.format(node))
+                        # if first == 'up' and second == 'down' and latest == 'down':
+                        #     context.bot.send_message(chat_id=chat_id, text='Node {} has gone offline :('.format(node))
+                        # elif first == 'down' and second == 'down' and latest == 'up':
+                        #     context.bot.send_message(chat_id=chat_id, text='Node {} has come back online :)'.format(node))
 
                         # For debug, send a message on every check
                         #context.bot.send_message(chat_id=chat_id, text='Node {} is {}'.format(node, ping[1]))
@@ -215,8 +222,11 @@ I can give you information about whether a node is up or down right now and also
 /network (/net) - change the network to "dev", "test", or "main" (default is main). If you don't provide an input, the currently selected network is shown. 
 Example: /network main
 
-/status - check the current status of one node. 
+/status - check the current status of one node. This is based on Grid proxy and should match what's reported by the explorer which updates relatively slowly.
 Example: /status 1
+
+/ping - check the current status of a node via a ping over Yggdrasil. This provides more responsive output than /status, but can misreport nodes as down if there's an issue with Yggdrasil.
+Example: /ping 42
 
 /subscribe (/sub) - subscribe to updates about one or more nodes. If you don't provide an input, the nodes you are currently subscribed to will be shown. 
 Example: /sub 1 2 3
@@ -234,7 +244,7 @@ def status_proxy(update: Update, context: CallbackContext):
     if context.args:
         net = context.bot_data['chats'][chat_id]['net']
         node = context.args[0]
-        online = check(net, node)['status']
+        online = check(net, node)
         context.bot.send_message(chat_id=chat_id, text='Node {} is {}'.format(node, online))
     else:
         pass
@@ -308,18 +318,26 @@ def subscribe(update: Update, context: CallbackContext):
             valid_nodes += ips
         
         if valid_nodes:
-            pings = ping_many(valid_nodes)
-
             new_subs = []
-            for stat in pings:
-                node = stat[0]
-                context.bot_data['nodes'][net][node]['status'] = stat[1]
-                subbed_nodes.append(node)
-                new_subs.append(node)
+            for node in valid_nodes:
+                node_id = int(node[0])
+                context.bot_data['nodes'][net][node_id]['status'] = check(net, node_id)
+                subbed_nodes.append(node_id)
+                new_subs.append(node_id)
+
+            
+            # pings = ping_many(valid_nodes)
+
+            # new_subs = []
+            # for stat in pings:
+            #     node = stat[0]
+            #     context.bot_data['nodes'][net][node]['status'] = stat[1]
+            #     subbed_nodes.append(node)
+            #     new_subs.append(node)
 
             context.bot.send_message(chat_id=chat_id, text='You have been successfully subscribed to node' + format_list(new_subs))
 
-        if duplicate_nodes:
+        elif duplicate_nodes:
             context.bot.send_message(chat_id=chat_id, text='You were already subscribed to node' + format_list(duplicate_nodes))
 
         else:
@@ -362,13 +380,14 @@ def unsubscribe(update: Update, context: CallbackContext):
 
 
 dispatcher.add_handler(CommandHandler('start', start))
-dispatcher.add_handler(CommandHandler('status', status_ping))
+dispatcher.add_handler(CommandHandler('status', status_proxy))
 dispatcher.add_handler(CommandHandler('subscribe', subscribe))
 dispatcher.add_handler(CommandHandler('sub', subscribe))
 dispatcher.add_handler(CommandHandler('unsubscribe', unsubscribe))
 dispatcher.add_handler(CommandHandler('unsub', unsubscribe))
 dispatcher.add_handler(CommandHandler('network', network))
 dispatcher.add_handler(CommandHandler('net', network))
+dispatcher.add_handler(CommandHandler('ping', status_ping))
 
 
 updater.job_queue.run_once(initialize, when=0)
