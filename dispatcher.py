@@ -35,75 +35,43 @@ def check_valid(net, node):
 
 def check_job(context: CallbackContext):
     for net in ['dev', 'test', 'main']:
-        node_ids = []
+        node_ids = set()
         for chat_id, data in context.bot_data['chats'].items():
-            node_ids = data['nodes'][net]
-            for n in node_ids:
-                #If proxy check fails, skip for now
+            node_ids |= set(data['nodes'][net])
+            
+        for n in node_ids:
+            #If proxy check fails, skip for now
+            try:
+                proxy_status = check(net, n)
+            except:
+                logging.exception("Error checking Grid_proxy")
+                continue
+
+            ping_status = ping(context.bot_data['nodes'][net][n]['ip'])
+
+            if context.bot_data['nodes'][net][n]['status'] == 'up' and proxy_status == 'down' and ping_status == 'down':
+                context.bot_data['nodes'][net][n]['alert'] = True
+                context.bot_data['nodes'][net][n]['status'] = 'down'
+                
+            elif context.bot_data['nodes'][net][n]['status'] == 'down' and (proxy_status == 'up' or ping_status == 'up'):
+                context.bot_data['nodes'][net][n]['alert'] = True
+                context.bot_data['nodes'][net][n]['status'] = 'up'
+                
+        for chat_id, data in context.bot_data['chats'].items():
+            for n in data['nodes'][net]:
                 try:
-                    proxy_status = check(net, n)
-                except:
-                    logging.exception("Error checking Grid_proxy")
-                    continue
+                    alert = context.bot_data['nodes'][net][n]['alert']
+                except KeyError:
+                    alert = False
 
-                ping_status = ping(context.bot_data['nodes'][net][n]['ip'])
-                print(net, n, proxy_status, ping_status)
-
-                if context.bot_data['nodes'][net][n]['status'] == 'up' and proxy_status == 'down' and ping_status == 'down':
-                    context.bot_data['nodes'][net][n]['status'] = 'down'
+                if alert and context.bot_data['nodes'][net][n]['status'] == 'down':
                     context.bot.send_message(chat_id=chat_id, text='Node {} has gone offline :('.format(n))
-                elif context.bot_data['nodes'][net][n]['status'] == 'down' and (proxy_status == 'up' or ping_status == 'up'):
-                    context.bot_data['nodes'][net][n]['status'] = 'up'
+                elif alert and context.bot_data['nodes'][net][n]['status'] == 'up':
                     context.bot.send_message(chat_id=chat_id, text='Node {} has come back online :)'.format(n))
+                
+        for n in context.bot_data['nodes'][net].keys():
+            context.bot_data['nodes'][net][n]['alert'] = False
 
-            # try:
-            #     context.bot_data['nodes'][net][n]['third_status'] = context.bot_data['nodes'][net][n]['previous_status']
-            # except KeyError:
-            #     pass
-
-            # try:
-            #     context.bot_data['nodes'][net][n]['previous_status'] = context.bot_data['nodes'][net][n]['status']
-            # except KeyError:
-            #     pass
-
-        #     nodes.append((n, context.bot_data['nodes'][net][n]['ip']))
-        # pings = ping_many(nodes, 5000)
-
-        # for chat_id, data in context.bot_data['chats'].items():
-        #     for node in data['nodes'][net]:
-        #         # if context.bot_data['nodes'][net][node]['offline'] = True and context.bot_data['nodes'][net][node]['status'] == 'up'
-        #         #     context.bot.send_message(chat_id=chat_id, text='Node {} has come back online :)'.format(node))
-
-        #         if context.bot_data['nodes'][net][node]['third_status'] == 'up' and context.bot_data['nodes'][net][node]['previous_status'] == 'down' and context.bot_data['nodes'][net][node]['status'] == 'down':
-        #             #if ping(context.bot_data['nodes'][net][node]['ip']) == 'down':
-        #             context.bot.send_message(chat_id=chat_id, text='Node {} has gone offline :('.format(node))
-        #                 #context.bot_data['nodes'][net][node]['offline'] = True
-        #         elif context.bot_data['nodes'][net][node]['third_status'] == 'down' and context.bot_data['nodes'][net][node]['previous_status'] == 'down' and context.bot_data['nodes'][net][node]['status'] == 'up':
-        #             context.bot.send_message(chat_id=chat_id, text='Node {} has come back online :)'.format(node))
-
-                # for ping in pings:
-                    # if ping[0] == node:
-                    #     # If node has only been checked once, skip notifications
-                    #     try:
-                    #         first = context.bot_data['nodes'][net][node]['previous_status']
-                    #     except KeyError:
-                    #         context.bot_data['nodes'][net][node]['previous_status'] = context.bot_data['nodes'][net][node]['status']
-                    #         context.bot_data['nodes'][net][node]['status'] = ping[1]
-                    #         continue
-
-                    #     second = context.bot_data['nodes'][net][node]['status']
-                    #     latest = ping[1]
-
-                    #     context.bot_data['nodes'][net][node]['status'] = latest
-                    #     context.bot_data['nodes'][net][node]['previous_status'] = second
-                        
-                        # if first == 'up' and second == 'down' and latest == 'down':
-                        #     context.bot.send_message(chat_id=chat_id, text='Node {} has gone offline :('.format(node))
-                        # elif first == 'down' and second == 'down' and latest == 'up':
-                        #     context.bot.send_message(chat_id=chat_id, text='Node {} has come back online :)'.format(node))
-
-                        # For debug, send a message on every check
-                        #context.bot.send_message(chat_id=chat_id, text='Node {} is {}'.format(node, ping[1]))
 
 def format_list(items):
     if len(items) == 1:
@@ -280,8 +248,12 @@ def status_proxy(update: Update, context: CallbackContext):
 
     if context.args:
         node = context.args[0]
-        online = check(net, node)
-        context.bot.send_message(chat_id=chat_id, text='Node {} is {}'.format(node, online))
+        try:
+            online = check(net, node)
+            context.bot.send_message(chat_id=chat_id, text='Node {} is {}'.format(node, online))
+        # TODO: better error checking and handling
+        except KeyError:
+            context.bot.send_message(chat_id=chat_id, text='Error fetching node status. Please check that the node id is valid for this network.')
     else:
         subbed_nodes = context.bot_data['chats'][chat_id]['nodes'][net]
         if subbed_nodes:
