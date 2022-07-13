@@ -271,13 +271,27 @@ This bot is experimental and probably has bugs. Only you are responsible for you
 
 def status_proxy(update: Update, context: CallbackContext):
     chat_id = update.effective_chat.id
+    try:
+        context.bot_data['chats'][chat_id]
+    except KeyError:
+        initialize_chat(chat_id, context)
+        
+    net = context.bot_data['chats'][chat_id]['net']
+
     if context.args:
-        net = context.bot_data['chats'][chat_id]['net']
         node = context.args[0]
         online = check(net, node)
         context.bot.send_message(chat_id=chat_id, text='Node {} is {}'.format(node, online))
     else:
-        context.bot.send_message(chat_id=chat_id, text='Please specify a node id')
+        subbed_nodes = context.bot_data['chats'][chat_id]['nodes'][net]
+        if subbed_nodes:
+            text = ''
+            for node in subbed_nodes:
+                online = check(net, node)
+                text += 'Node {} is {}\n'.format(node, online)
+            context.bot.send_message(chat_id=chat_id, text=text)
+        else:
+            context.bot.send_message(chat_id=chat_id, text='Please specify a node id')
 
 def status_ping(update: Update, context: CallbackContext):
     chat_id = update.effective_chat.id
@@ -286,10 +300,10 @@ def status_ping(update: Update, context: CallbackContext):
     except KeyError:
         initialize_chat(chat_id, context)
 
+    net = context.bot_data['chats'][chat_id]['net']
     if context.args:
-        net = context.bot_data['chats'][chat_id]['net']
+        
         node = context.args[0]
-
         try:
             ip = (int(node), context.bot_data['nodes'][net][int(node)]['ip'])
         except KeyError:
@@ -309,6 +323,15 @@ def status_ping(update: Update, context: CallbackContext):
         context.bot.send_message(chat_id=chat_id, text='Node {} is {}'.format(node, stat))
 
     else:
+        subbed_nodes = context.bot_data['chats'][chat_id]['nodes'][net]
+        if subbed_nodes:
+            text = ''
+            for node in subbed_nodes:
+                online = check(net, node)
+                text += 'Node {} is {}\n'.format(node, online)
+            context.bot.send_message(chat_id=chat_id, text=text)
+        else:
+            context.bot.send_message(chat_id=chat_id, text='Please specify a node id')
         context.bot.send_message(chat_id=chat_id, text='Please specify a node id')
 
 def subscribe(update: Update, context: CallbackContext):
@@ -344,7 +367,6 @@ def subscribe(update: Update, context: CallbackContext):
                 for ip in ips:
                     context.bot_data['nodes'][net][ip[0]] = {'ip': ip[1]}
             except:
-                print("extered except clause")
                 context.bot.send_message(chat_id=chat_id, text='Error fetching node details. If this issue persists, please notify @scottyeager')
                 raise
 
