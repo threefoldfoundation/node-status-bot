@@ -299,12 +299,11 @@ def status_ping(update: Update, context: CallbackContext):
         if subbed_nodes:
             text = ''
             for node in subbed_nodes:
-                online = check(net, node)
-                text += 'Node {} is {}\n'.format(node, online)
+                stat = ping(context.bot_data['nodes'][net][int(node)]['ip'])
+                text += 'Node {} is {}\n'.format(node, stat)
             context.bot.send_message(chat_id=chat_id, text=text)
         else:
             context.bot.send_message(chat_id=chat_id, text='Please specify a node id')
-        context.bot.send_message(chat_id=chat_id, text='Please specify a node id')
 
 def subscribe(update: Update, context: CallbackContext):
     chat_id = update.effective_chat.id
