@@ -1,7 +1,7 @@
-import logging, requests, subprocess, argparse
+import logging, requests, subprocess, argparse, time
 
-from telegram import Update
-from telegram.ext import Updater, CallbackContext, CommandHandler, PicklePersistence
+from telegram import Update, ParseMode
+from telegram.ext import Updater, CallbackContext, CommandHandler, PicklePersistence, Defaults
 
 from gql import Client, gql
 from gql.transport.requests import RequestsHTTPTransport
@@ -11,11 +11,15 @@ parser = argparse.ArgumentParser()
 parser.add_argument('token', help='Specify a bot token')
 parser.add_argument('-v', '--verbose', help='Verbose output', action="store_true")
 parser.add_argument('-p', '--poll', help='Set polling frequency in seconds', type=int, default=300)
+parser.add_argument('-a', '--admin', help='Set the admin chat id', type=int)
 parser.add_argument('-t', '--test', help='Enable test feature', action="store_true")
+parser.add_argument('-d', '--dump', help='Dump bot data', action="store_true")
 args = parser.parse_args()
 
 pickler = PicklePersistence(filename='bot_data')
-updater = Updater(token=args.token, persistence=pickler, use_context=True)
+
+defaults = Defaults(parse_mode=ParseMode.HTML)
+updater = Updater(token=args.token, persistence=pickler, use_context=True, defaults=defaults)
 
 dispatcher = updater.dispatcher
 
@@ -27,50 +31,85 @@ else:
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=log_level)
 
 def check(net, node):
-    r = requests.get(get_proxy(net) + str(node) + '/status', timeout=5)
-    return r.json()['status']
+    tries = 3
+    while tries:
+        try:
+            r = requests.get(get_proxy(net) + 'nodes/' + str(node) + '/status', timeout=2)
+            if r.status_code != 200:
+                logging.warning('Got a non 200 status from grid proxy request, status was: {}'.format(r.status_code))
+            return r.json()['status']
+        except requests.Timeout:
+            logging.exception('Timed out trying to access grid proxy')
+        except:
+            logging.exception('Error checking grid proxy.')
+            
+        tries -= 1
+        time.sleep(.5)
+    raise ConnectionError('Filed to connect to grid proxy after 3 tries')
 
 def check_valid(net, node):
-    requests.get(get_proxy(net) + node).ok
+    return requests.get(get_proxy(net) + 'nodes/' + str(node)).ok
 
 def check_job(context: CallbackContext):
+    """
+    The main attraction, when it's working properly. This function collects all the node ids that have an active subscription, checks their status via both proxy and ping, then sends alerts to users whose nodes have a status change.
+    """
     for net in ['dev', 'test', 'main']:
+        # Multiple users could sub to the same node, find the unique set of actively subscribed nodes
         node_ids = set()
         for chat_id, data in context.bot_data['chats'].items():
             node_ids |= set(data['nodes'][net])
             
         for n in node_ids:
-            #If proxy check fails, skip for now
+            try:
+                node = context.bot_data['nodes'][net][n]
+            except:
+                logging.exception('Error retreiving node')
+                # TODO: This shouldn't happen, but if it did, we should probably create the node
+                continue
+
+            # We already tried 3 times, so move on and do again next loop
             try:
                 proxy_status = check(net, n)
             except:
-                logging.exception("Error checking Grid_proxy")
+                logging.exception("Error checking grid proxy")
                 continue
 
-            ping_status = ping(context.bot_data['nodes'][net][n]['ip'])
+            # Do this every time, because ips can change, but ping anyway if we can't update it this time
+            try:
+                update_node_ip(net, n, context)
+            except:
+                logging.exception("Error updating node ip")
 
-            if context.bot_data['nodes'][net][n]['status'] == 'up' and proxy_status == 'down' and ping_status == 'down':
-                context.bot_data['nodes'][net][n]['alert'] = True
-                context.bot_data['nodes'][net][n]['status'] = 'down'
-                
-            elif context.bot_data['nodes'][net][n]['status'] == 'down' and (proxy_status == 'up' or ping_status == 'up'):
-                context.bot_data['nodes'][net][n]['alert'] = True
-                context.bot_data['nodes'][net][n]['status'] = 'up'
-                
-        for chat_id, data in context.bot_data['chats'].items():
-            for n in data['nodes'][net]:
-                try:
-                    alert = context.bot_data['nodes'][net][n]['alert']
-                except KeyError:
-                    alert = False
+            try:
+                ping_status = ping(node['ip'])
+            except:
+                logging.exception("Error pinging node")
+                continue
 
-                if alert and context.bot_data['nodes'][net][n]['status'] == 'down':
-                    context.bot.send_message(chat_id=chat_id, text='Node {} has gone offline :('.format(n))
-                elif alert and context.bot_data['nodes'][net][n]['status'] == 'up':
-                    context.bot.send_message(chat_id=chat_id, text='Node {} has come back online :)'.format(n))
-                
-        for n in context.bot_data['nodes'][net].keys():
-            context.bot_data['nodes'][net][n]['alert'] = False
+            try:
+                previous_status = node.setdefault('status')
+
+                if proxy_status == 'down' and ping_status == 'down':
+                    node['status'] = 'down'
+                    
+                elif proxy_status == 'up' or ping_status == 'up':
+                    node['status'] = 'up'
+
+                # Yikes! We're 7 indents deep looping over all subscribers again to figure out who to alert. We have to do this because multiple users might be subbed to the same node. TODO: subbed users should be a property of the node. Then we can avoid the part about making set of nodes with active subs above too
+                if previous_status == 'up' and node['status'] == 'down':
+                    for chat_id, data in context.bot_data['chats'].items():
+                        if n in data['nodes'][net]:
+                            context.bot.send_message(chat_id=chat_id, text='Node {} has gone offline :('.format(n))
+
+                elif previous_status == 'down' and node['status'] == 'up':
+                    for chat_id, data in context.bot_data['chats'].items():
+                        if n in data['nodes'][net]:
+                            context.bot.send_message(chat_id=chat_id, text='Node {} has come back online :)'.format(n))
+            
+            except:
+                logging.exception("Error in alert block")
+                continue
 
 
 def format_list(items):
@@ -93,6 +132,29 @@ def format_url(net, base):
 
     return base.format(net)
 
+def update_node_ip(net, node_id, context):
+    ip = get_node_ip_proxy(net, node_id)
+    if ip:
+        try:
+            context.bot_data['nodes'][net][int(node_id)]['ip'] = ip
+        except KeyError:
+            context.bot_data['nodes'][net][int(node_id)] = {'ip': ip}
+
+def get_node_ip_proxy(net, node_id):
+    tries = 3
+    while tries:
+        try:
+            proxy = get_proxy(net)
+            node = requests.get(proxy + 'nodes/' + str(node_id)).json()
+            twin = requests.get(proxy + 'twins/?twin_id=' + str(node['twinId'])).json()
+            return twin[0]['ip']
+        except:
+            logging.exception('Error while looking up node ip')
+
+        tries -= 1
+        time.sleep(.5)
+    raise ConnectionError('Filed to connect to grid proxy after 3 tries')
+
 def get_node_ips(net, nodes):
     if net == 'main':
         gql_url = 'https://graph.grid.tf/graphql'
@@ -103,6 +165,7 @@ def get_node_ips(net, nodes):
     transport = RequestsHTTPTransport(url=gql_url, verify=True, retries=3)
     client = Client(transport=transport, fetch_schema_from_transport=True)
 
+    # There's a better way... use graphql vars
     query = """
     query getNode {{
     nodes(where: {{nodeID_in: {}}}) {{
@@ -138,7 +201,7 @@ def get_node_ips(net, nodes):
         return []
 
 def get_proxy(net):
-    base = 'https://gridproxy{}.grid.tf/nodes/'
+    base = 'https://gridproxy{}.grid.tf/'
     if net == 'main':
         net = ''
     else:
@@ -256,16 +319,25 @@ def status_proxy(update: Update, context: CallbackContext):
             context.bot.send_message(chat_id=chat_id, text='Error fetching node status. Please check that the node id is valid for this network.')
     else:
         subbed_nodes = context.bot_data['chats'][chat_id]['nodes'][net]
+
         if subbed_nodes:
+            up, down = [], []
             text = ''
             for node in subbed_nodes:
-                online = check(net, node)
-                text += 'Node {} is {}\n'.format(node, online)
+                status = check(net, node)
+                if status == 'up':
+                    up.append(node)
+                if status == 'down':
+                    down.append(node)
+            text = format_nodes(up, down)
             context.bot.send_message(chat_id=chat_id, text=text)
         else:
             context.bot.send_message(chat_id=chat_id, text='Please specify a node id')
 
 def status_ping(update: Update, context: CallbackContext):
+    """
+    Get the node status using a ping over Yggdrasil, rather than checking grid proxy. This gives more real time data, but can fail if Yggdrasil is having issues. Refresh the node on each check, because they can sometimes change.
+    """
     chat_id = update.effective_chat.id
     try:
         context.bot_data['chats'][chat_id]
@@ -274,10 +346,15 @@ def status_ping(update: Update, context: CallbackContext):
 
     net = context.bot_data['chats'][chat_id]['net']
     if context.args:
-        
         node = context.args[0]
+        if not check_valid(net, node):
+            context.bot.send_message(chat_id=chat_id, text='Node with that id not found on this network. Please double check the node id and try again')
+            return
+
         try:
+            update_node_ip(net, node, context)
             ip = (int(node), context.bot_data['nodes'][net][int(node)]['ip'])
+        # With update_node_ip, we'll only hit this path if grid proxy is down
         except KeyError:
             context.bot.send_message(chat_id=chat_id, text='Fetching node details...')
             try:
@@ -287,23 +364,51 @@ def status_ping(update: Update, context: CallbackContext):
                 raise
             if ip:
                 context.bot_data['nodes'][net][ip[0]] = {'ip': ip[1]}
-            else:
-                context.bot.send_message(chat_id=chat_id, text='Node with that id not found on this network')
 
+        context.bot.send_message(chat_id=chat_id, text='Pinging node {}. One moment...'.format(ip[0]))
         stat = ping(ip[1])
-        context.bot_data['nodes'][net][ip[0]]['status'] = stat
+        # context.bot_data['nodes'][net][ip[0]]['status'] = stat
         context.bot.send_message(chat_id=chat_id, text='Node {} is {}'.format(node, stat))
 
     else:
         subbed_nodes = context.bot_data['chats'][chat_id]['nodes'][net]
         if subbed_nodes:
-            text = ''
+            if len(subbed_nodes) == 1:
+                context.bot.send_message(chat_id=chat_id, text='Pinging node {}. One moment...'.format(subbed_nodes[0]))
+            else:
+                context.bot.send_message(chat_id=chat_id, text='Pinging {} nodes. One moment...'.format(len(subbed_nodes)))
+            up, down = [], []
             for node in subbed_nodes:
+                update_node_ip(net, node, context)
                 stat = ping(context.bot_data['nodes'][net][int(node)]['ip'])
-                text += 'Node {} is {}\n'.format(node, stat)
+                if stat == 'up':
+                    up.append(node)
+                elif stat == 'down':
+                    down.append(node)
+
+            text = format_nodes(up, down)
             context.bot.send_message(chat_id=chat_id, text=text)
         else:
             context.bot.send_message(chat_id=chat_id, text='Please specify a node id')
+
+def format_nodes(up, down):
+    up.sort()
+    down.sort()
+    text = ''
+
+    if up:
+        text += '<b><u>Up nodes:</u></b>\n'
+        for node in up:
+            text += str(node) + '\n'
+    if down:
+        if up:
+            text += '\n'
+        text += '<b><u>Down nodes:</u></b>\n'
+        for node in down:
+            text += str(node) + '\n'
+
+    return text
+
 
 def subscribe(update: Update, context: CallbackContext):
     chat_id = update.effective_chat.id
@@ -348,7 +453,7 @@ def subscribe(update: Update, context: CallbackContext):
             try:
                 for node in valid_nodes:
                     node_id = int(node[0])
-                    context.bot_data['nodes'][net][node_id]['status'] = check(net, node_id)
+                    # context.bot_data['nodes'][net][node_id]['status'] = check(net, node_id)
                     subbed_nodes.append(node_id)
                     new_subs.append(node_id)
 
@@ -428,6 +533,23 @@ def test(update: Update, context: CallbackContext):
             context.bot.send_message(chat_id=chat_id, text='Node has come back online :)')
         time.sleep(10)
 
+def dump(update: Update, context: CallbackContext):
+    # Dumps bot data to the terminal
+    print(context.bot_data)
+
+def check_chat(update: Update, context: CallbackContext):
+    chat = update.effective_chat.id
+    context.bot.send_message(chat_id=chat, text='Your chat id is {}'.format(chat))
+
+def node_ip(update: Update, context: CallbackContext):
+    chat_id = update.effective_chat.id
+    if context.args:
+        node = context.args[0]
+        net = context.bot_data['chats'][chat_id]['net']
+        ip = get_node_ip_proxy(net, node)
+        context.bot.send_message(chat_id=chat_id, text=ip)
+    else:
+        context.bot.send_message(chat_id=chat_id, text='Please enter a node id')
 
 dispatcher.add_handler(CommandHandler('start', start))
 dispatcher.add_handler(CommandHandler('status', status_proxy))
@@ -438,9 +560,16 @@ dispatcher.add_handler(CommandHandler('unsub', unsubscribe))
 dispatcher.add_handler(CommandHandler('network', network))
 dispatcher.add_handler(CommandHandler('net', network))
 dispatcher.add_handler(CommandHandler('ping', status_ping))
+dispatcher.add_handler(CommandHandler('chat_id', check_chat))
+dispatcher.add_handler(CommandHandler('node_ip', node_ip))
+
+
 
 if args.test:
     dispatcher.add_handler(CommandHandler('test', test))
+
+if args.dump:
+    dispatcher.add_handler(CommandHandler('dump', dump))
 
 
 updater.job_queue.run_once(initialize, when=0)
