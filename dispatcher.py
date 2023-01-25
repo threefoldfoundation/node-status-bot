@@ -76,26 +76,9 @@ def check_job(context: CallbackContext):
                 logging.exception("Error checking grid proxy")
                 continue
 
-            # Do this every time, because ips can change, but ping anyway if we can't update it this time
-            try:
-                update_node_ip(net, n, context)
-            except:
-                logging.exception("Error updating node ip")
-
-            try:
-                ping_status = ping(node['ip'])
-            except:
-                logging.exception("Error pinging node")
-                continue
-
             try:
                 previous_status = node.setdefault('status')
-
-                if proxy_status == 'down' and ping_status == 'down':
-                    node['status'] = 'down'
-                    
-                elif proxy_status == 'up' or ping_status == 'up':
-                    node['status'] = 'up'
+                node['status'] = proxy_status
 
                 # Yikes! We're 7 indents deep looping over all subscribers again to figure out who to alert. We have to do this because multiple users might be subbed to the same node. TODO: subbed users should be a property of the node. Then we can avoid the part about making set of nodes with active subs above too
                 if previous_status == 'up' and node['status'] == 'down':
