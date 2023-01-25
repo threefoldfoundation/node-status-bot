@@ -11,6 +11,7 @@ parser = argparse.ArgumentParser()
 parser.add_argument('token', help='Specify a bot token')
 parser.add_argument('-v', '--verbose', help='Verbose output', action="store_true")
 parser.add_argument('-p', '--poll', help='Set polling frequency in seconds', type=int, default=300)
+parser.add_argument('-l', '--logs', help='Specify how many lines the log file must grow before a notification is sent to the admin', type=int, default=10)
 parser.add_argument('-a', '--admin', help='Set the admin chat id', type=int)
 parser.add_argument('-t', '--test', help='Enable test feature', action="store_true")
 parser.add_argument('-d', '--dump', help='Dump bot data', action="store_true")
@@ -535,7 +536,8 @@ def test(update: Update, context: CallbackContext):
 
 def dump(update: Update, context: CallbackContext):
     # Dumps bot data to the terminal
-    print(context.bot_data)
+    if update.effective_chat.id == args.admin:
+        print(context.bot_data)
 
 def check_chat(update: Update, context: CallbackContext):
     chat = update.effective_chat.id
@@ -551,29 +553,58 @@ def node_ip(update: Update, context: CallbackContext):
     else:
         context.bot.send_message(chat_id=chat_id, text='Please enter a node id')
 
+def send_logs(update: Update, context: CallbackContext):
+    if update.effective_chat.id != args.admin:
+        return
+
+    if context.args:
+        lines = context.args[0]
+    else:
+        lines = 50
+
+    with open('logs', 'r') as logs:
+        log_lines = [line for line in logs]
+        text = ''
+        for line in log_lines:
+            text += line
+        if text:
+            context.bot.send_message(chat_id=args.admin, text=text)
+        else:
+            context.bot.send_message(chat_id=args.admin, text='Log file empty')
+
+def log_job(context: CallbackContext):
+    with open('logs', 'r') as logs:
+        log_length = sum(1 for line in logs)
+
+    last_length = context.bot_data.set_default('last_log_length', log_length)
+
+    if log_length - last_length > args.logs and args.admin:
+        context.bot.send_message(chat_id=args.admin, text='Log file has grown by {} lines. Houston, we have a ...?'.format(args.logs))
+
+
+# Anyone commands
+dispatcher.add_handler(CommandHandler('chat_id', check_chat))
+dispatcher.add_handler(CommandHandler('network', network))
+dispatcher.add_handler(CommandHandler('net', network))
+dispatcher.add_handler(CommandHandler('node_ip', node_ip))
+dispatcher.add_handler(CommandHandler('ping', status_ping))
 dispatcher.add_handler(CommandHandler('start', start))
 dispatcher.add_handler(CommandHandler('status', status_proxy))
 dispatcher.add_handler(CommandHandler('subscribe', subscribe))
 dispatcher.add_handler(CommandHandler('sub', subscribe))
 dispatcher.add_handler(CommandHandler('unsubscribe', unsubscribe))
 dispatcher.add_handler(CommandHandler('unsub', unsubscribe))
-dispatcher.add_handler(CommandHandler('network', network))
-dispatcher.add_handler(CommandHandler('net', network))
-dispatcher.add_handler(CommandHandler('ping', status_ping))
-dispatcher.add_handler(CommandHandler('chat_id', check_chat))
-dispatcher.add_handler(CommandHandler('node_ip', node_ip))
 
-
+# Admin commands
+dispatcher.add_handler(CommandHandler('dump', dump))
+dispatcher.add_handler(CommandHandler('logs', send_logs))
 
 if args.test:
     dispatcher.add_handler(CommandHandler('test', test))
 
-if args.dump:
-    dispatcher.add_handler(CommandHandler('dump', dump))
-
-
 updater.job_queue.run_once(initialize, when=0)
 updater.job_queue.run_repeating(check_job, interval=args.poll, first=0)
+updater.job_queue.run_repeating(log_job, interval=3600, first=0)
 
 updater.start_polling()
 updater.idle()
