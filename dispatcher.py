@@ -322,7 +322,17 @@ def status_ping(update: Update, context: CallbackContext):
     """
     Get the node status using a ping over Yggdrasil, rather than checking grid proxy. This gives more real time data, but can fail if Yggdrasil is having issues. Refresh the node on each check, because they can sometimes change.
     """
+
     chat_id = update.effective_chat.id
+
+    context.bot.send_message(chat_id=chat_id, text="/ping is disabled for now, until an implementation based on the new RMB is ready. Please stay tuned for an announcement on the bot's channel: https://t.me/node_bot_updates")
+
+    return
+
+    ###################################################################
+    # DISABLED FOR NOW, WE CAN'T GET THE YGGDRASIL IPS FROM GQL ANYMORE
+    ###################################################################
+
     try:
         context.bot_data['chats'][chat_id]
     except KeyError:
