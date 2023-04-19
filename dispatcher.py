@@ -41,12 +41,13 @@ def check(net, node):
             return r.json()['status']
         except requests.Timeout:
             logging.exception('Timed out trying to access grid proxy')
+            raise
         except:
             logging.exception('Error checking grid proxy.')
             
         tries -= 1
         time.sleep(.5)
-    raise ConnectionError('Filed to connect to grid proxy after 3 tries')
+    raise ConnectionError('Failed to connect to grid proxy after 3 tries')
 
 def check_valid(net, node):
     return requests.get(get_proxy(net) + 'nodes/' + str(node)).ok
@@ -430,17 +431,26 @@ def subscribe(update: Update, context: CallbackContext):
                 duplicate_nodes.append(node)
 
         if unknown_nodes:
-            context.bot.send_message(chat_id=chat_id, text='Fetching node details...')
-            try:
-                ips = get_node_ips(net, unknown_nodes)
+            for node in unknown_nodes:
+                try:
+                    check(net, node)
+                    valid_nodes.append((node, None))
+                    context.bot_data['nodes'][net][int(node)] = {'ip': None}
 
-                for ip in ips:
-                    context.bot_data['nodes'][net][ip[0]] = {'ip': ip[1]}
-            except:
-                context.bot.send_message(chat_id=chat_id, text='Error fetching node details. If this issue persists, please notify @scottyeager')
-                raise
+                except requests.Timeout:
+                    context.bot.send_message(chat_id=chat_id, text='Something went wrong, please try again or wait a while if the issue persists.')
+                    
+        #     context.bot.send_message(chat_id=chat_id, text='Fetching node details...')
+        #     try:
+        #         ips = get_node_ips(net, unknown_nodes)
 
-            valid_nodes += ips
+        #         for ip in ips:
+        #             context.bot_data['nodes'][net][ip[0]] = {'ip': ip[1]}
+        #     except:
+        #         context.bot.send_message(chat_id=chat_id, text='Error fetching node details. If this issue persists, please notify @scottyeager')
+        #         raise
+
+        #     valid_nodes += ips
         
         if valid_nodes:
             new_subs = []
