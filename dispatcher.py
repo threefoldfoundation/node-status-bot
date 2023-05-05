@@ -7,6 +7,8 @@ from gql import Client, gql
 from gql.transport.requests import RequestsHTTPTransport
 from gql.transport.exceptions import TransportServerError
 
+import grid_graphql
+
 parser = argparse.ArgumentParser()
 parser.add_argument('token', help='Specify a bot token')
 parser.add_argument('-v', '--verbose', help='Verbose output', action="store_true")
@@ -23,6 +25,11 @@ defaults = Defaults(parse_mode=ParseMode.HTML)
 updater = Updater(token=args.token, persistence=pickler, use_context=True, defaults=defaults)
 
 dispatcher = updater.dispatcher
+
+# Spin these up at launch so they fetch their schemas
+mainnet_gql = grid_graphql.GraphQL('https://graphql.grid.tf/graphql')
+testnet_gql = grid_graphql.GraphQL('https://graphql.test.grid.tf/graphql')
+devnet_gql = grid_graphql.GraphQL('https://graphql.dev.grid.tf/graphql')
 
 if args.verbose:
     log_level = logging.INFO
@@ -83,14 +90,23 @@ def check_job(context: CallbackContext):
 
                 # Yikes! We're 7 indents deep looping over all subscribers again to figure out who to alert. We have to do this because multiple users might be subbed to the same node. TODO: subbed users should be a property of the node. Then we can avoid the part about making set of nodes with active subs above too
                 if previous_status == 'up' and node['status'] == 'down':
+                    try:
+                        power = get_power_state(net, n)
+                    except:
+                        logging.exception("Error fetching power state")
+                        power = {'target': 'unknown'}
+                        
                     for chat_id, data in context.bot_data['chats'].items():
                         if n in data['nodes'][net]:
-                            context.bot.send_message(chat_id=chat_id, text='Node {} has gone offline :('.format(n))
+                            if power['target'] == 'Down':
+                                context.bot.send_message(chat_id=chat_id, text='Node {} has gone to sleep'.format(n))
+                            else:
+                                context.bot.send_message(chat_id=chat_id, text='Node {} has gone offline'.format(n))
 
                 elif previous_status == 'down' and node['status'] == 'up':
                     for chat_id, data in context.bot_data['chats'].items():
                         if n in data['nodes'][net]:
-                            context.bot.send_message(chat_id=chat_id, text='Node {} has come back online :)'.format(n))
+                            context.bot.send_message(chat_id=chat_id, text='Node {} has come back online'.format(n))
             
             except:
                 logging.exception("Error in alert block")
@@ -124,6 +140,17 @@ def update_node_ip(net, node_id, context):
             context.bot_data['nodes'][net][int(node_id)]['ip'] = ip
         except KeyError:
             context.bot_data['nodes'][net][int(node_id)] = {'ip': ip}
+
+def get_power_state(net, node_id):
+    if net == 'main':
+        endpoint = mainnet_gql
+    elif net == 'test':
+        endpoint = mainnet_gql
+    elif net == 'dev':
+        endpoint = devnet_gql
+
+    return endpoint.nodes(['power'], nodeID_eq=node_id)[0]['power']
+
 
 def get_node_ip_proxy(net, node_id):
     tries = 3
@@ -437,7 +464,8 @@ def subscribe(update: Update, context: CallbackContext):
                     valid_nodes.append((node, None))
                     context.bot_data['nodes'][net][int(node)] = {'ip': None}
 
-                except requests.Timeout:
+                # (requests.Timeout, requests.exceptions.ReadTimeout)
+                except:
                     context.bot.send_message(chat_id=chat_id, text='Something went wrong, please try again or wait a while if the issue persists.')
                     
         #     context.bot.send_message(chat_id=chat_id, text='Fetching node details...')
@@ -521,21 +549,36 @@ def unsubscribe(update: Update, context: CallbackContext):
 def test(update: Update, context: CallbackContext):
     import time
 
-    chat_id = update.effective_chat.id
-    status = 'up'
-
+    mainnet_gql = grid_graphql.GraphQL('https://graphql.grid.tf/graphql')
     print("entering loop")
     while 1:
-        ping_status = open('ping_status', 'r').read().rstrip('\n')
-        proxy_status = open('proxy_status', 'r').read().rstrip('\n')
-        print(ping_status == 'down', proxy_status == 'down')
-        if status == 'up' and proxy_status == 'down' and ping_status == 'down':
-            status = 'down'
-            context.bot.send_message(chat_id=chat_id, text='Node has gone offline :(')
-        elif status == 'down' and (proxy_status == 'up' or ping_status == 'up'):
-            status = 'up'
-            context.bot.send_message(chat_id=chat_id, text='Node has come back online :)')
-        time.sleep(10)
+        previous_status = open('test/previous_status', 'r').read().rstrip('\n')
+        proxy_status = open('test/proxy_status', 'r').read().rstrip('\n')
+        n = int(open('test/node_id', 'r').read().rstrip('\n'))
+        net = open('test/net', 'r').read().rstrip('\n')
+
+        # breakpoint()
+        if previous_status == 'up' and proxy_status == 'down':
+            power = get_power_state(net, n)
+            for chat_id, data in context.bot_data['chats'].items():
+                if n in data['nodes'][net]:
+                    # breakpoint()
+                    if power['target'] == 'Down':
+                        msg = 'Node {} has gone to sleep'.format(n)
+                        context.bot.send_message(chat_id=chat_id, text=msg)
+                        print(msg)
+                    else:
+                        msg = 'Node {} has gone offline :('.format(n)
+                        context.bot.send_message(chat_id=chat_id, text=msg)
+                        print(msg)
+
+        elif previous_status == 'down' and proxy_status == 'up':
+            for chat_id, data in context.bot_data['chats'].items():
+                if n in data['nodes'][net]:
+                    msg = 'Node {} has come back online :)'.format(n)
+                    context.bot.send_message(chat_id=chat_id, text=msg)
+                    print(msg)
+        time.sleep(5)
 
 def dump(update: Update, context: CallbackContext):
     # Dumps bot data to the terminal
