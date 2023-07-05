@@ -327,7 +327,7 @@ def status_proxy(update: Update, context: CallbackContext):
             online = check(net, node)
             context.bot.send_message(chat_id=chat_id, text='Node {} is {}'.format(node, online))
         # TODO: better error checking and handling
-        except KeyError:
+        except (KeyError, ConnectionError):
             context.bot.send_message(chat_id=chat_id, text='Error fetching node status. Please check that the node id is valid for this network.')
     else:
         subbed_nodes = context.bot_data['chats'][chat_id]['nodes'][net]
