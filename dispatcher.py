@@ -90,20 +90,16 @@ def check_job(context: CallbackContext):
 
                 # Yikes! We're 7 indents deep looping over all subscribers again to figure out who to alert. We have to do this because multiple users might be subbed to the same node. TODO: subbed users should be a property of the node. Then we can avoid the part about making set of nodes with active subs above too
                 if previous_status == 'up' and node['status'] == 'down':
-                    try:
-                        power = get_power_state(net, n)
-                    except:
-                        logging.exception("Error fetching power state")
-                        power = {'target': 'unknown'}
-                        
                     for chat_id, data in context.bot_data['chats'].items():
                         if n in data['nodes'][net]:
-                            if power['target'] == 'Down':
-                                context.bot.send_message(chat_id=chat_id, text='Node {} has gone to sleep'.format(n))
-                            else:
-                                context.bot.send_message(chat_id=chat_id, text='Node {} has gone offline'.format(n))
+                            context.bot.send_message(chat_id=chat_id, text='Node {} has gone offline'.format(n))
 
-                elif previous_status == 'down' and node['status'] == 'up':
+                elif previous_status == 'up' and node['status'] == 'standby':
+                    for chat_id, data in context.bot_data['chats'].items():
+                        if n in data['nodes'][net]:
+                            context.bot.send_message(chat_id=chat_id, text='Node {} has gone to sleep'.format(n))
+
+                elif previous_status in ('down', 'standby') and node['status'] == 'up':
                     for chat_id, data in context.bot_data['chats'].items():
                         if n in data['nodes'][net]:
                             context.bot.send_message(chat_id=chat_id, text='Node {} has come back online'.format(n))
@@ -333,15 +329,17 @@ def status_proxy(update: Update, context: CallbackContext):
         subbed_nodes = context.bot_data['chats'][chat_id]['nodes'][net]
 
         if subbed_nodes:
-            up, down = [], []
+            up, down, standby = [], [], []
             text = ''
             for node in subbed_nodes:
                 status = check(net, node)
                 if status == 'up':
                     up.append(node)
-                if status == 'down':
+                elif status == 'down':
                     down.append(node)
-            text = format_nodes(up, down)
+                elif status == 'standby':
+                    standby.append(node)
+            text = format_nodes(up, down, standby)
             context.bot.send_message(chat_id=chat_id, text=text)
         else:
             context.bot.send_message(chat_id=chat_id, text='Please specify a node id')
@@ -413,9 +411,10 @@ def status_ping(update: Update, context: CallbackContext):
         else:
             context.bot.send_message(chat_id=chat_id, text='Please specify a node id')
 
-def format_nodes(up, down):
+def format_nodes(up, down, standby):
     up.sort()
     down.sort()
+    standby.sort()
     text = ''
 
     if up:
@@ -427,6 +426,13 @@ def format_nodes(up, down):
             text += '\n'
         text += '<b><u>Down nodes:</u></b>\n'
         for node in down:
+            text += str(node) + '\n'
+
+    if standby:
+        if up or down:
+            text += '\n'
+        text += '<b><u>Standby nodes:</u></b>\n'
+        for node in standby:
             text += str(node) + '\n'
 
     return text
@@ -552,32 +558,30 @@ def test(update: Update, context: CallbackContext):
     mainnet_gql = grid_graphql.GraphQL('https://graphql.grid.tf/graphql')
     print("entering loop")
     while 1:
+        node = {}
         previous_status = open('test/previous_status', 'r').read().rstrip('\n')
-        proxy_status = open('test/proxy_status', 'r').read().rstrip('\n')
+        node['status'] = open('test/proxy_status', 'r').read().rstrip('\n')
         n = int(open('test/node_id', 'r').read().rstrip('\n'))
         net = open('test/net', 'r').read().rstrip('\n')
 
         # breakpoint()
-        if previous_status == 'up' and proxy_status == 'down':
-            power = get_power_state(net, n)
+        if previous_status == 'up' and node['status'] == 'down':
             for chat_id, data in context.bot_data['chats'].items():
                 if n in data['nodes'][net]:
-                    # breakpoint()
-                    if power['target'] == 'Down':
-                        msg = 'Node {} has gone to sleep'.format(n)
-                        context.bot.send_message(chat_id=chat_id, text=msg)
-                        print(msg)
-                    else:
-                        msg = 'Node {} has gone offline :('.format(n)
-                        context.bot.send_message(chat_id=chat_id, text=msg)
-                        print(msg)
+                    context.bot.send_message(chat_id=chat_id, text='Node {} has gone offline'.format(n))
+                print('Node {} has gone offline'.format(n))
 
-        elif previous_status == 'down' and proxy_status == 'up':
+        elif previous_status == 'up' and node['status'] == 'standby':
             for chat_id, data in context.bot_data['chats'].items():
                 if n in data['nodes'][net]:
-                    msg = 'Node {} has come back online :)'.format(n)
-                    context.bot.send_message(chat_id=chat_id, text=msg)
-                    print(msg)
+                    context.bot.send_message(chat_id=chat_id, text='Node {} has gone to sleep'.format(n))
+                print('Node {} has gone to sleep'.format(n))
+
+        elif previous_status in ('down', 'standby') and node['status'] == 'up':
+            for chat_id, data in context.bot_data['chats'].items():
+                if n in data['nodes'][net]:
+                    context.bot.send_message(chat_id=chat_id, text='Node {} has come back online'.format(n))
+                print('Node {} has come back online'.format(n))
         time.sleep(5)
 
 def dump(update: Update, context: CallbackContext):
