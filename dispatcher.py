@@ -8,6 +8,9 @@ from gql.transport.requests import RequestsHTTPTransport
 from gql.transport.exceptions import TransportServerError
 
 import grid_graphql
+from grid_types import Node
+
+GRID_NETWORKS = GRID_NETWORKS
 
 parser = argparse.ArgumentParser()
 parser.add_argument('token', help='Specify a bot token')
@@ -31,17 +34,16 @@ mainnet_gql = grid_graphql.GraphQL('https://graphql.grid.tf/graphql')
 testnet_gql = grid_graphql.GraphQL('https://graphql.test.grid.tf/graphql')
 devnet_gql = grid_graphql.GraphQL('https://graphql.dev.grid.tf/graphql')
 
+graphqls = {'main': mainnet_gql,
+            'test': testnet_gql,
+            'dev': devnet_gql}
+
 if args.verbose:
     log_level = logging.INFO
 else:
     log_level = logging.WARNING
 
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=log_level)
-
-if args.dump:
-    print('Bot data:')
-    print(dispatcher.bot_data)
-    print()
 
 def check(net, node):
     tries = 3
@@ -68,7 +70,7 @@ def check_job(context: CallbackContext):
     """
     The main attraction, when it's working properly. This function collects all the node ids that have an active subscription, checks their status via both proxy and ping, then sends alerts to users whose nodes have a status change.
     """
-    for net in ['dev', 'test', 'main']:
+    for net in GRID_NETWORKS:
         # Multiple users could sub to the same node, find the unique set of actively subscribed nodes
         node_ids = set()
         for chat_id, data in context.bot_data['chats'].items():
@@ -90,21 +92,21 @@ def check_job(context: CallbackContext):
                 continue
 
             try:
-                previous_status = node.setdefault('status')
-                node['status'] = proxy_status
+                previous_status = node.status
+                node.status = proxy_status
 
                 # Yikes! We're 7 indents deep looping over all subscribers again to figure out who to alert. We have to do this because multiple users might be subbed to the same node. TODO: subbed users should be a property of the node. Then we can avoid the part about making set of nodes with active subs above too
-                if previous_status == 'up' and node['status'] == 'down':
+                if previous_status == 'up' and node.status == 'down':
                     for chat_id, data in context.bot_data['chats'].items():
                         if n in data['nodes'][net]:
                             context.bot.send_message(chat_id=chat_id, text='Node {} has gone offline'.format(n))
 
-                elif previous_status == 'up' and node['status'] == 'standby':
+                elif previous_status == 'up' and node.status == 'standby':
                     for chat_id, data in context.bot_data['chats'].items():
                         if n in data['nodes'][net]:
                             context.bot.send_message(chat_id=chat_id, text='Node {} has gone to sleep'.format(n))
 
-                elif previous_status in ('down', 'standby') and node['status'] == 'up':
+                elif previous_status in ('down', 'standby') and node.status == 'up':
                     for chat_id, data in context.bot_data['chats'].items():
                         if n in data['nodes'][net]:
                             context.bot.send_message(chat_id=chat_id, text='Node {} has come back online'.format(n))
@@ -152,6 +154,25 @@ def get_power_state(net, node_id):
 
     return endpoint.nodes(['power'], nodeID_eq=node_id)[0]['power']
 
+def get_nodes(net, node_ids):
+    """
+    Query a list of node ids in GraphQL, create Node objects for consistency and easy field acces, then assign them a status in the same way the Grid Proxy does and return them.
+    """
+    grapql = graphqls[net]
+    nodes = graphql.nodes(['nodeID', 'updatedAt', 'power'], nodeID_in=node_ids)
+    nodes = [Node(node) for node in nodes]
+
+    one_hour_ago = time.time() - 60 * 60
+
+    for node in nodes:
+        if node.updatedAt > one_hour_ago and node.power['state'] == 'up':
+            node.status = 'up'
+        elif node.updatedAt < one_hour_ago and node.power['state'] == 'down':
+            node.status = 'standby'
+        else:
+            node.status = 'down'
+
+    return nodes
 
 def get_node_ip_proxy(net, node_id):
     tries = 3
@@ -166,7 +187,7 @@ def get_node_ip_proxy(net, node_id):
 
         tries -= 1
         time.sleep(.5)
-    raise ConnectionError('Filed to connect to grid proxy after 3 tries')
+    raise ConnectionError('Failed to connect to grid proxy after 3 tries')
 
 def get_node_ips(net, nodes):
     if net == 'main':
@@ -228,7 +249,7 @@ def initialize(context: CallbackContext):
         except KeyError:
             context.bot_data[key] = {}
 
-    for net in ['dev', 'test', 'main']:
+    for net in GRID_NETWORKS:
         try:
             context.bot_data['nodes'][net]
         except KeyError:
@@ -236,7 +257,7 @@ def initialize(context: CallbackContext):
 
     subs = 0
     for chat, data in context.bot_data['chats'].items():
-        for net in ['dev', 'test', 'main']:
+        for net in GRID_NETWORKS:
             if data['nodes'][net]:
                 subs += 1
                 break
@@ -246,8 +267,18 @@ def initialize_chat(chat_id, context):
     context.bot_data['chats'][chat_id] = {}
     context.bot_data['chats'][chat_id]['net'] = 'main'
     context.bot_data['chats'][chat_id]['nodes'] = {}
-    for net in ['dev', 'test', 'main']:
+    for net in GRID_NETWORKS:
         context.bot_data['chats'][chat_id]['nodes'][net] = []
+
+def migrate_nodes(context: CallbackContext):
+    """
+    Convert dict based node data to instances of Node class. Only needed when updating a bot that has existing data using the old style.
+    """
+    for net in GRID_NETWORKS:
+        nodes = context.bot_data['nodes'][net]
+        for node_id in nodes.keys():
+            if type(nodes[node_id]) is dict:
+                nodes[node_id] = Node(nodes[node_id])
 
 def network(update: Update, context: CallbackContext):
     chat_id = update.effective_chat.id
@@ -258,7 +289,7 @@ def network(update: Update, context: CallbackContext):
 
     if context.args:
         net = context.args[0]
-        if net in ['dev', 'test', 'main']:
+        if net in GRID_NETWORKS:
             context.bot_data['chats'][chat_id]['net'] = net
             context.bot.send_message(chat_id=chat_id, text='Set network to {}net'.format(net))
         else:
@@ -457,23 +488,23 @@ def subscribe(update: Update, context: CallbackContext):
         valid_nodes = []
         unknown_nodes = []
         duplicate_nodes = []
-        for node in context.args:
+        for node_id in context.args:
             # Check first if they're already subscribed
-            if not int(node) in subbed_nodes:
+            if not int(node_id) in subbed_nodes:
                 try:
-                    ip = context.bot_data['nodes'][net][int(node)]['ip']
-                    valid_nodes.append((node, ip))
+                    ip = context.bot_data['nodes'][net][int(node_id)]['ip']
+                    valid_nodes.append((node_id, ip))
                 except KeyError:
-                    unknown_nodes.append(node)
+                    unknown_nodes.append(node_id)
             else:
-                duplicate_nodes.append(node)
+                duplicate_nodes.append(node_id)
 
         if unknown_nodes:
-            for node in unknown_nodes:
+            for node_id in unknown_nodes:
                 try:
-                    check(net, node)
-                    valid_nodes.append((node, None))
-                    context.bot_data['nodes'][net][int(node)] = {'ip': None}
+                    if node := get_nodes([node_id]):
+                        valid_nodes.append((node_id, None))
+                        context.bot_data['nodes'][net][int(node_id)] = node
 
                 # (requests.Timeout, requests.exceptions.ReadTimeout)
                 except:
@@ -553,7 +584,7 @@ def unsubscribe(update: Update, context: CallbackContext):
             else:
                 context.bot.send_message(chat_id=chat_id, text='No valid and subscribed node ids found.')
         else:
-            for net in ['dev', 'test', 'main']:
+            for net in GRID_NETWORKS:
                 context.bot_data['chats'][chat_id]['nodes'][net] = []
             context.bot.send_message(chat_id=chat_id, text='You have been unsubscribed from all updates')
 
@@ -565,24 +596,24 @@ def test(update: Update, context: CallbackContext):
     while 1:
         node = {}
         previous_status = open('test/previous_status', 'r').read().rstrip('\n')
-        node['status'] = open('test/proxy_status', 'r').read().rstrip('\n')
+        node.status = open('test/proxy_status', 'r').read().rstrip('\n')
         n = int(open('test/node_id', 'r').read().rstrip('\n'))
         net = open('test/net', 'r').read().rstrip('\n')
 
         # breakpoint()
-        if previous_status == 'up' and node['status'] == 'down':
+        if previous_status == 'up' and node.status == 'down':
             for chat_id, data in context.bot_data['chats'].items():
                 if n in data['nodes'][net]:
                     context.bot.send_message(chat_id=chat_id, text='Node {} has gone offline'.format(n))
                 print('Node {} has gone offline'.format(n))
 
-        elif previous_status == 'up' and node['status'] == 'standby':
+        elif previous_status == 'up' and node.status == 'standby':
             for chat_id, data in context.bot_data['chats'].items():
                 if n in data['nodes'][net]:
                     context.bot.send_message(chat_id=chat_id, text='Node {} has gone to sleep'.format(n))
                 print('Node {} has gone to sleep'.format(n))
 
-        elif previous_status in ('down', 'standby') and node['status'] == 'up':
+        elif previous_status in ('down', 'standby') and node.status == 'up':
             for chat_id, data in context.bot_data['chats'].items():
                 if n in data['nodes'][net]:
                     context.bot.send_message(chat_id=chat_id, text='Node {} has come back online'.format(n))
@@ -651,7 +682,13 @@ dispatcher.add_handler(CommandHandler('logs', send_logs))
 if args.test:
     dispatcher.add_handler(CommandHandler('test', test))
 
+if args.dump:
+    print('Bot data:')
+    print(dispatcher.bot_data)
+    print()
+
 updater.job_queue.run_once(initialize, when=0)
+updater.job_queue.run_once(migrate_nodes, when=0)
 updater.job_queue.run_repeating(check_job, interval=args.poll, first=0)
 updater.job_queue.run_repeating(log_job, interval=3600, first=0)
 
