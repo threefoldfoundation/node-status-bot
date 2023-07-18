@@ -38,6 +38,11 @@ else:
 
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=log_level)
 
+if args.dump:
+    print('Bot data:')
+    print(dispatcher.bot_data)
+    print()
+
 def check(net, node):
     tries = 3
     while tries:
@@ -584,11 +589,6 @@ def test(update: Update, context: CallbackContext):
                 print('Node {} has come back online'.format(n))
         time.sleep(5)
 
-def dump(update: Update, context: CallbackContext):
-    # Dumps bot data to the terminal
-    if update.effective_chat.id == args.admin:
-        print(context.bot_data)
-
 def check_chat(update: Update, context: CallbackContext):
     chat = update.effective_chat.id
     context.bot.send_message(chat_id=chat, text='Your chat id is {}'.format(chat))
@@ -646,7 +646,6 @@ dispatcher.add_handler(CommandHandler('unsubscribe', unsubscribe))
 dispatcher.add_handler(CommandHandler('unsub', unsubscribe))
 
 # Admin commands
-dispatcher.add_handler(CommandHandler('dump', dump))
 dispatcher.add_handler(CommandHandler('logs', send_logs))
 
 if args.test:
