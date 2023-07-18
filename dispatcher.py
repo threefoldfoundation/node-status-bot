@@ -10,7 +10,7 @@ from gql.transport.exceptions import TransportServerError
 import grid_graphql
 from grid_types import Node
 
-GRID_NETWORKS = GRID_NETWORKS
+GRID_NETWORKS = ['main', 'test', 'dev']
 
 parser = argparse.ArgumentParser()
 parser.add_argument('token', help='Specify a bot token')
@@ -29,7 +29,6 @@ updater = Updater(token=args.token, persistence=pickler, use_context=True, defau
 
 dispatcher = updater.dispatcher
 
-# Spin these up at launch so they fetch their schemas
 mainnet_gql = grid_graphql.GraphQL('https://graphql.grid.tf/graphql')
 testnet_gql = grid_graphql.GraphQL('https://graphql.test.grid.tf/graphql')
 devnet_gql = grid_graphql.GraphQL('https://graphql.dev.grid.tf/graphql')
@@ -40,6 +39,10 @@ graphqls = {'main': mainnet_gql,
 
 if args.verbose:
     log_level = logging.INFO
+
+    #Force fetching the schemas when verbose so they don't dump on console
+    for gql in graphqls.values():
+        gql.fetch_schema()
 else:
     log_level = logging.WARNING
 
@@ -158,16 +161,16 @@ def get_nodes(net, node_ids):
     """
     Query a list of node ids in GraphQL, create Node objects for consistency and easy field acces, then assign them a status in the same way the Grid Proxy does and return them.
     """
-    grapql = graphqls[net]
+    graphql = graphqls[net]
     nodes = graphql.nodes(['nodeID', 'updatedAt', 'power'], nodeID_in=node_ids)
     nodes = [Node(node) for node in nodes]
 
     one_hour_ago = time.time() - 60 * 60
 
     for node in nodes:
-        if node.updatedAt > one_hour_ago and node.power['state'] == 'up':
+        if node.updatedAt > one_hour_ago and node.power['state'] == 'Up':
             node.status = 'up'
-        elif node.updatedAt < one_hour_ago and node.power['state'] == 'down':
+        elif node.updatedAt < one_hour_ago and node.power['state'] == 'Down':
             node.status = 'standby'
         else:
             node.status = 'down'
@@ -278,6 +281,7 @@ def migrate_nodes(context: CallbackContext):
         nodes = context.bot_data['nodes'][net]
         for node_id in nodes.keys():
             if type(nodes[node_id]) is dict:
+                nodes[node_id]['nodeID'] = node_id
                 nodes[node_id] = Node(nodes[node_id])
 
 def network(update: Update, context: CallbackContext):
@@ -502,12 +506,13 @@ def subscribe(update: Update, context: CallbackContext):
         if unknown_nodes:
             for node_id in unknown_nodes:
                 try:
-                    if node := get_nodes([node_id]):
-                        valid_nodes.append((node_id, None))
-                        context.bot_data['nodes'][net][int(node_id)] = node
+                    node = get_nodes(net, [node_id])[0]
+                    valid_nodes.append((node_id, None))
+                    context.bot_data['nodes'][net][int(node_id)] = node
 
                 # (requests.Timeout, requests.exceptions.ReadTimeout)
                 except:
+                    logging.exception("Failed to fetch node info")
                     context.bot.send_message(chat_id=chat_id, text='Something went wrong, please try again or wait a while if the issue persists.')
                     
         #     context.bot.send_message(chat_id=chat_id, text='Fetching node details...')
