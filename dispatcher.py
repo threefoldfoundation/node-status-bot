@@ -48,9 +48,6 @@ else:
 
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=log_level)
 
-def check_valid(net, node):
-    return requests.get(get_proxy(net) + 'nodes/' + str(node)).ok
-
 def check_job(context: CallbackContext):
     """
     The main attraction, when it's working properly. This function collects all the node ids that have an active subscription, checks their status via both proxy and ping, then sends alerts to users whose nodes have a status change.
@@ -110,6 +107,33 @@ def format_list(items):
             text = text + str(i) + ', '
         text = text + 'and ' + str(items[-1])
     return text
+
+def format_nodes(up, down, standby):
+    up.sort()
+    down.sort()
+    standby.sort()
+    text = ''
+
+    if up:
+        text += '<b><u>Up nodes:</u></b>\n'
+        for node in up:
+            text += str(node) + '\n'
+    if down:
+        if up:
+            text += '\n'
+        text += '<b><u>Down nodes:</u></b>\n'
+        for node in down:
+            text += str(node) + '\n'
+
+    if standby:
+        if up or down:
+            text += '\n'
+        text += '<b><u>Standby nodes:</u></b>\n'
+        for node in standby:
+            text += str(node) + '\n'
+
+    return text
+
 
 def get_nodes(net, node_ids):
     """
@@ -172,12 +196,8 @@ def initialize(context: CallbackContext):
                 break
     print('{} chats and {} subscribed users'.format(len(context.bot_data['chats']), subs))
 
-def initialize_chat(chat_id, context):
-    context.bot_data['chats'][chat_id] = {}
-    context.bot_data['chats'][chat_id]['net'] = 'main'
-    context.bot_data['chats'][chat_id]['nodes'] = {}
-    for net in GRID_NETWORKS:
-        context.bot_data['chats'][chat_id]['nodes'][net] = []
+def new_user():
+    return {'net': 'main', 'nodes': {'main': [], 'test': [], 'dev': []}}
 
 def migrate_data(context: CallbackContext):
     """
@@ -192,25 +212,23 @@ def migrate_data(context: CallbackContext):
 
 def network(update: Update, context: CallbackContext):
     chat_id = update.effective_chat.id
-    try:
-        context.bot_data['chats'][chat_id]
-    except KeyError:
-        initialize_chat(chat_id, context)
+    user = context.bot_data['chats'].setdefault(chat_id, new_user())
 
+    user = context.bot_data['chats'].setdefault(chat_id, new_user())
     if context.args:
         net = context.args[0]
         if net in GRID_NETWORKS:
-            context.bot_data['chats'][chat_id]['net'] = net
+            user['net'] = net
             context.bot.send_message(chat_id=chat_id, text='Set network to {}net'.format(net))
         else:
             context.bot.send_message(chat_id=chat_id, text='Please specify a valid network: dev, test, or main')
     else:
-        net = context.bot_data['chats'][chat_id]['net']
+        net = user['net']
         context.bot.send_message(chat_id=chat_id, text='Network is set to {}net'.format(net))
 
 def start(update: Update, context: CallbackContext):
     chat_id = update.effective_chat.id
-    initialize_chat(chat_id, context)
+    context.bot_data['chats'].setdefault(chat_id, new_user())
     msg = '''
 Hey there, I'm the ThreeFold Grid 3 node status bot. Beep boop.
 
@@ -238,19 +256,17 @@ This bot is experimental and probably has bugs. Only you are responsible for you
 
 def status_gql(update: Update, context: CallbackContext):
     chat_id = update.effective_chat.id
-    try:
-        context.bot_data['chats'][chat_id]
-    except KeyError:
-        initialize_chat(chat_id, context)
+    user = context.bot_data['chats'].setdefault(chat_id, new_user())
+
         
-    net = context.bot_data['chats'][chat_id]['net']
+    net = user['net']
 
     if context.args:
         node = get_nodes(net, context.args)[0]
         context.bot.send_message(chat_id=chat_id, text='Node {} is {}'.format(node.nodeId, node.status))
 
     else:
-        subbed_nodes = context.bot_data['chats'][chat_id]['nodes'][net]
+        subbed_nodes = user['nodes'][net]
 
         if subbed_nodes:
             up, down, standby = [], [], []
@@ -263,42 +279,6 @@ def status_gql(update: Update, context: CallbackContext):
                     down.append(node.nodeId)
                 elif node.status == 'standby':
                     standby.append(node.nodeId)
-            text = format_nodes(up, down, standby)
-            context.bot.send_message(chat_id=chat_id, text=text)
-        else:
-            context.bot.send_message(chat_id=chat_id, text='Please specify a node id')
-
-def status_proxy(update: Update, context: CallbackContext):
-    chat_id = update.effective_chat.id
-    try:
-        context.bot_data['chats'][chat_id]
-    except KeyError:
-        initialize_chat(chat_id, context)
-        
-    net = context.bot_data['chats'][chat_id]['net']
-
-    if context.args:
-        node = context.args[0]
-        try:
-            online = check(net, node)
-            context.bot.send_message(chat_id=chat_id, text='Node {} is {}'.format(node, online))
-        # TODO: better error checking and handling
-        except (KeyError, ConnectionError):
-            context.bot.send_message(chat_id=chat_id, text='Error fetching node status. Please check that the node id is valid for this network.')
-    else:
-        subbed_nodes = context.bot_data['chats'][chat_id]['nodes'][net]
-
-        if subbed_nodes:
-            up, down, standby = [], [], []
-            text = ''
-            for node in subbed_nodes:
-                status = check(net, node)
-                if status == 'up':
-                    up.append(node)
-                elif status == 'down':
-                    down.append(node)
-                elif status == 'standby':
-                    standby.append(node)
             text = format_nodes(up, down, standby)
             context.bot.send_message(chat_id=chat_id, text=text)
         else:
@@ -319,12 +299,10 @@ def status_ping(update: Update, context: CallbackContext):
     # DISABLED FOR NOW, WE CAN'T GET THE YGGDRASIL IPS FROM GQL ANYMORE
     ###################################################################
 
-    try:
-        context.bot_data['chats'][chat_id]
-    except KeyError:
-        initialize_chat(chat_id, context)
+    user = context.bot_data['chats'].setdefault(chat_id, new_user())
 
-    net = context.bot_data['chats'][chat_id]['net']
+
+    net = user['net']
     if context.args:
         node = context.args[0]
         if not check_valid(net, node):
@@ -351,7 +329,7 @@ def status_ping(update: Update, context: CallbackContext):
         context.bot.send_message(chat_id=chat_id, text='Node {} is {}'.format(node, stat))
 
     else:
-        subbed_nodes = context.bot_data['chats'][chat_id]['nodes'][net]
+        subbed_nodes = user['nodes'][net]
         if subbed_nodes:
             if len(subbed_nodes) == 1:
                 context.bot.send_message(chat_id=chat_id, text='Pinging node {}. One moment...'.format(subbed_nodes[0]))
@@ -371,136 +349,61 @@ def status_ping(update: Update, context: CallbackContext):
         else:
             context.bot.send_message(chat_id=chat_id, text='Please specify a node id')
 
-def format_nodes(up, down, standby):
-    up.sort()
-    down.sort()
-    standby.sort()
-    text = ''
-
-    if up:
-        text += '<b><u>Up nodes:</u></b>\n'
-        for node in up:
-            text += str(node) + '\n'
-    if down:
-        if up:
-            text += '\n'
-        text += '<b><u>Down nodes:</u></b>\n'
-        for node in down:
-            text += str(node) + '\n'
-
-    if standby:
-        if up or down:
-            text += '\n'
-        text += '<b><u>Standby nodes:</u></b>\n'
-        for node in standby:
-            text += str(node) + '\n'
-
-    return text
-
-
 def subscribe(update: Update, context: CallbackContext):
     chat_id = update.effective_chat.id
-    try:
-        context.bot_data['chats'][chat_id]
-    except KeyError:
-        initialize_chat(chat_id, context)
+    user = context.bot_data['chats'].setdefault(chat_id, new_user())
 
-    net = context.bot_data['chats'][chat_id]['net']
-    subbed_nodes = context.bot_data['chats'][chat_id]['nodes'][net]
-    
+    net = user['net']
+    subbed_nodes = user['nodes'][net]
+
+    node_ids = []
     if context.args:
-        valid_nodes = []
-        unknown_nodes = []
-        duplicate_nodes = []
-        for node_id in context.args:
-            # Check first if they're already subscribed
-            if not int(node_id) in subbed_nodes:
-                try:
-                    context.bot_data['nodes'][net][int(node_id)]
-                    valid_nodes.append(node_id)
-                except KeyError:
-                    unknown_nodes.append(node_id)
-            else:
-                duplicate_nodes.append(node_id)
-
-        if unknown_nodes:
-            for node_id in unknown_nodes:
-                try:
-                    node = get_nodes(net, [node_id])[0]
-                    valid_nodes.append(node_id)
-                    context.bot_data['nodes'][net][int(node_id)] = node
-
-                # (requests.Timeout, requests.exceptions.ReadTimeout)
-                except:
-                    logging.exception("Failed to fetch node info")
-                    context.bot.send_message(chat_id=chat_id, text='Something went wrong, please try again or wait a while if the issue persists.')
-                    
-        #     context.bot.send_message(chat_id=chat_id, text='Fetching node details...')
-        #     try:
-        #         ips = get_node_ips(net, unknown_nodes)
-
-        #         for ip in ips:
-        #             context.bot_data['nodes'][net][ip[0]] = {'ip': ip[1]}
-        #     except:
-        #         context.bot.send_message(chat_id=chat_id, text='Error fetching node details. If this issue persists, please notify @scottyeager')
-        #         raise
-
-        #     valid_nodes += ips
-        
-        if valid_nodes:
-            new_subs = []
-            try:
-                for node in valid_nodes:
-                    node_id = int(node)
-                    # context.bot_data['nodes'][net][node_id]['status'] = check(net, node_id)
-                    subbed_nodes.append(node_id)
-                    new_subs.append(node_id)
-
-                
-                # pings = ping_many(valid_nodes)
-
-                # new_subs = []
-                # for stat in pings:
-                #     node = stat[0]
-                #     context.bot_data['nodes'][net][node]['status'] = stat[1]
-                #     subbed_nodes.append(node)
-                #     new_subs.append(node)
-
-                context.bot.send_message(chat_id=chat_id, text='You have been successfully subscribed to node' + format_list(new_subs))
-            except:
-                logging.exception("Failed status check during sub")
-                context.bot.send_message(chat_id=chat_id, text='Something went wrong, please try again or wait a while if the issue persists.')
-                raise
-
-        elif duplicate_nodes:
-            context.bot.send_message(chat_id=chat_id, text='You were already subscribed to node' + format_list(duplicate_nodes))
-
-        else:
-            context.bot.send_message(chat_id=chat_id, text='Sorry, no valid node ids found.')
-
+        try:
+            for arg in context.args:
+                nodes.append(int(arg))
+        except:
+            context.bot.send_message(chat_id=chat_id, text='There was a problem processing your input. This command accepts one or more node ids separated by a space.')
+            return
     else:
         if subbed_nodes:
             context.bot.send_message(chat_id=chat_id, text='You are currently subscribed to node' + format_list(subbed_nodes))
+            return
         else:
             context.bot.send_message(chat_id=chat_id, text='You are not subscribed to any nodes')
+            return
+    
+    try:
+        new_ids = [n for n in node_ids if n not in subbed_nodes]
+        new_nodes = get_nodes(net, new_ids)
+    
+    except:
+        logging.exception("Failed to fetch node info")
+        context.bot.send_message(chat_id=chat_id, text='Error fetching node data. Please wait a moment and try again.')
+        return
+
+
+    msg = 'You have been successfully subscribed to node' + format_list(new_subs)
+
+    if subbed_nodes:
+        msg += '\n\nYou are now subscribed to node' + format_list(subbed_nodes + new_nodes)
+    
+    subbed_nodes.extend(new_nodes)
+    context.bot.send_message(chat_id=chat_id, text=msg)
 
 def unsubscribe(update: Update, context: CallbackContext):
     chat_id = update.effective_chat.id
-    try:
-        context.bot_data['chats'][chat_id]
-    except KeyError:
-        initialize_chat(chat_id, context)
+    user = context.bot_data['chats'].setdefault(chat_id, new_user())
 
-    if len(context.bot_data['chats'][chat_id]['nodes']) == 0:
+    if len(user['nodes']) == 0:
         context.bot.send_message(chat_id=chat_id, text="You weren't subscribed to any updates.")
     else:
         if context.args:
             removed_nodes = []
-            net = context.bot_data['chats'][chat_id]['net']
-            subbed_nodes = context.bot_data['chats'][chat_id]['nodes'][net]
+            net = user['net']
+            subbed_nodes = user['nodes'][net]
             for node in context.args:
                 try:
-                    subbed_nodes.pop(subbed_nodes.index(int(node)))
+                    subbed_nodes.remove(int(node))
                     removed_nodes.append(node)
                 except ValueError:
                     pass
@@ -508,42 +411,12 @@ def unsubscribe(update: Update, context: CallbackContext):
                 context.bot.send_message(chat_id=chat_id, text='You have been unsubscribed from node' + format_list(removed_nodes))
             else:
                 context.bot.send_message(chat_id=chat_id, text='No valid and subscribed node ids found.')
-        else:
+        elif context.args[0] == 'all':
             for net in GRID_NETWORKS:
-                context.bot_data['chats'][chat_id]['nodes'][net] = []
+                user['nodes'][net] = []
             context.bot.send_message(chat_id=chat_id, text='You have been unsubscribed from all updates')
-
-def test(update: Update, context: CallbackContext):
-    import time
-
-    mainnet_gql = grid_graphql.GraphQL('https://graphql.grid.tf/graphql')
-    print("entering loop")
-    while 1:
-        node = {}
-        previous_status = open('test/previous_status', 'r').read().rstrip('\n')
-        node.status = open('test/proxy_status', 'r').read().rstrip('\n')
-        n = int(open('test/node_id', 'r').read().rstrip('\n'))
-        net = open('test/net', 'r').read().rstrip('\n')
-
-        # breakpoint()
-        if previous_status == 'up' and node.status == 'down':
-            for chat_id, data in context.bot_data['chats'].items():
-                if n in data['nodes'][net]:
-                    context.bot.send_message(chat_id=chat_id, text='Node {} has gone offline'.format(n))
-                print('Node {} has gone offline'.format(n))
-
-        elif previous_status == 'up' and node.status == 'standby':
-            for chat_id, data in context.bot_data['chats'].items():
-                if n in data['nodes'][net]:
-                    context.bot.send_message(chat_id=chat_id, text='Node {} has gone to sleep'.format(n))
-                print('Node {} has gone to sleep'.format(n))
-
-        elif previous_status in ('down', 'standby') and node.status == 'up':
-            for chat_id, data in context.bot_data['chats'].items():
-                if n in data['nodes'][net]:
-                    context.bot.send_message(chat_id=chat_id, text='Node {} has come back online'.format(n))
-                print('Node {} has come back online'.format(n))
-        time.sleep(5)
+        else:
+            context.bot.send_message(chat_id=chat_id, text='Please write "/unsubscribe all" if you wish to remove all subscribed nodes.')
 
 def check_chat(update: Update, context: CallbackContext):
     chat = update.effective_chat.id
