@@ -53,8 +53,7 @@ def check_job(context: CallbackContext):
     The main attraction, when it's working properly. This function collects all the node ids that have an active subscription, checks their status via both proxy and ping, then sends alerts to users whose nodes have a status change.
     """
     for net in GRID_NETWORKS:
-        # Multiple users could sub to the same node, find the unique set of actively subscribed nodes
-
+        # First gather all actively subscribed nodes and note who is subscribed
         try:
             subbed_nodes = {}
 
@@ -91,7 +90,6 @@ def check_job(context: CallbackContext):
                         context.bot.send_message(chat_id=chat_id, text='Node {} wake up initiated'.format(node.nodeId))
             except:
                 logging.exception("Error in alert block")
-                continue
 
             finally:
                 context.bot_data['nodes'][net][node.nodeId] = node
@@ -137,7 +135,7 @@ def format_nodes(up, down, standby):
 
 def get_nodes(net, node_ids):
     """
-    Query a list of node ids in GraphQL, create Node objects for consistency and easy field acces, then assign them a status in the same way the Grid Proxy does and return them.
+    Query a list of node ids in GraphQL, create Node objects for consistency and easy field acces, then assign them a status and return them.
     """
     graphql = graphqls[net]
     nodes = graphql.nodes(['nodeID', 'updatedAt', 'power'], nodeID_in=node_ids)
@@ -166,9 +164,14 @@ def get_nodes_from_file(net, node_ids):
         return []
 
 def get_node_status(node):
+    """
+    More or less the same methodology that Grid Proxy uses. Nodes are supposed to report every 40 minutes, so we consider them offline after one hour. Standby nodes should wake up once every 24 hours, so we consider them offline after that.
+    """
     one_hour_ago = time.time() - 60 * 60
     one_day_ago = time.time() - 60 * 60 * 24
-    if node.updatedAt > one_hour_ago and node.power['state'] == 'Up':
+
+    # It's possible that some node might not have a power state
+    if node.updatedAt > one_hour_ago and node.power['state'] != 'Down':
         return 'up'
     elif node.power['state'] == 'Down' and node.updatedAt > one_day_ago:
         return 'standby'
@@ -177,16 +180,10 @@ def get_node_status(node):
 
 def initialize(context: CallbackContext):
     for key in ['chats', 'nodes']:
-        try:
-            context.bot_data[key]
-        except KeyError:
-            context.bot_data[key] = {}
+        context.bot_data.setdefault(key, {})
 
     for net in GRID_NETWORKS:
-        try:
-            context.bot_data['nodes'][net]
-        except KeyError:
-            context.bot_data['nodes'][net] = {}
+        context.bot_data['nodes'].setdefault(net, {})
 
     subs = 0
     for chat, data in context.bot_data['chats'].items():
@@ -264,12 +261,12 @@ def status_gql(update: Update, context: CallbackContext):
     if context.args:
         try:
             node = get_nodes(net, context.args)[0]
+            context.bot.send_message(chat_id=chat_id, text='Node {} is {}'.format(node.nodeId, node.status))
         except IndexError:
             context.bot.send_message(chat_id=chat_id, text='Node id not valid on {}net'.format(net))
         except:
             logging.exception("Failed to fetch node info")
             context.bot.send_message(chat_id=chat_id, text='Error fetching node data. Please wait a moment and try again.')
-        context.bot.send_message(chat_id=chat_id, text='Node {} is {}'.format(node.nodeId, node.status))
 
     else:
         subbed_nodes = user['nodes'][net]
