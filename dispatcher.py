@@ -82,7 +82,6 @@ def check_job(context: CallbackContext):
             for chat_id, data in context.bot_data['chats'].items():
                 for node_id in data['nodes'][net]:
                     subbed_nodes.setdefault(node_id, []).append(chat_id)
-
             nodes = get_nodes(net, subbed_nodes)
         except:
             logging.exception("Error fetching node data for check")
@@ -99,6 +98,10 @@ def check_job(context: CallbackContext):
                 elif previous.status == 'up' and node.status == 'standby':
                     for chat_id in subbed_nodes[node.nodeId]:
                         context.bot.send_message(chat_id=chat_id, text='Node {} has gone to sleep'.format(node.nodeId))
+
+                elif previous.status == 'standby' and node.status == 'down':
+                    for chat_id in subbed_nodes[node.nodeId]:
+                        context.bot.send_message(chat_id=chat_id, text='Node {} did not wake up within 24 hours'.format(node.nodeId))
 
                 elif previous.status in ('down', 'standby') and node.status == 'up':
                     for chat_id in subbed_nodes[node.nodeId]:
@@ -208,14 +211,24 @@ def get_nodes(net, node_ids):
     one_hour_ago = time.time() - 60 * 60
 
     for node in nodes:
-        if node.updatedAt > one_hour_ago and node.power['state'] == 'Up':
-            node.status = 'up'
-        elif node.updatedAt < one_hour_ago and node.power['state'] == 'Down':
-            node.status = 'standby'
-        else:
-            node.status = 'down'
+        node.status = get_node_status(node)
 
     return nodes
+
+def get_nodes_from_file(net, node_ids):
+    """
+    For use in test mode, to emulate get_nodes using data in a file. The updatedAt value is given in the file as a delta of how many seconds in the past and converted to absolute time here
+    """
+    if net == 'main':
+        text = open('./test/node', 'r').read()
+        node = Node(json.loads(text))
+        node.updatedAt = time.time() - node.updatedAt
+        node.status = get_node_status(node)
+
+        return [node]
+
+    else:
+        return []
 
 def get_node_ip_proxy(net, node_id):
     tries = 3
@@ -277,6 +290,16 @@ def get_node_ips(net, nodes):
     else:
         return []
 
+def get_node_status(node):
+    one_hour_ago = time.time() - 60 * 60
+    one_day_ago = time.time() - 60 * 60 * 24
+    if node.updatedAt > one_hour_ago and node.power['state'] == 'Up':
+        return 'up'
+    elif node.power['state'] == 'Down' and node.updatedAt > one_day_ago:
+        return 'standby'
+    else:
+        return 'down'
+
 def get_proxy(net):
     base = 'https://gridproxy{}.grid.tf/'
     if net == 'main':
@@ -312,15 +335,6 @@ def initialize_chat(chat_id, context):
     context.bot_data['chats'][chat_id]['nodes'] = {}
     for net in GRID_NETWORKS:
         context.bot_data['chats'][chat_id]['nodes'][net] = []
-
-def load_node_file(net, node_ids):
-    """
-    For use in test mode, to emulate get_nodes using data in a file. The updatedAt value is given in the file as a delta of how many seconds in the past and converted to absolute time here
-    """
-    text = open('./test/node', 'r')
-    node = Node(json.loads(text))
-    node.updatedAt = time.time() - node.updatedAt
-    return [node]
 
 def migrate_data(context: CallbackContext):
     """
@@ -766,6 +780,8 @@ dispatcher.add_handler(CommandHandler('unsub', unsubscribe))
 dispatcher.add_handler(CommandHandler('logs', send_logs))
 
 if args.test:
+    import json
+    get_nodes = get_nodes_from_file
     dispatcher.add_handler(CommandHandler('test', test))
 
 if args.dump:
