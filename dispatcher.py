@@ -75,49 +75,88 @@ def check_job(context: CallbackContext):
     """
     for net in GRID_NETWORKS:
         # Multiple users could sub to the same node, find the unique set of actively subscribed nodes
-        node_ids = set()
-        for chat_id, data in context.bot_data['chats'].items():
-            node_ids |= set(data['nodes'][net])
-            
-        for n in node_ids:
+
+        try:
+            subbed_nodes = {}
+
+            for chat_id, data in context.bot_data['chats'].items():
+                for node_id in data['nodes'][net]:
+                    subbed_nodes.setdefault(node_id, []).append(chat_id)
+
+            nodes = get_nodes(net, subbed_nodes)
+        except:
+            logging.exception("Error fetching node data for check")
+            continue
+
+        for node in nodes:
             try:
-                node = context.bot_data['nodes'][net][n]
+                previous = context.bot_data['nodes'][net][node.nodeId]
+
+                if previous.status == 'up' and node.status == 'down':
+                    for chat_id in subbed_nodes[node.nodeId]:
+                        context.bot.send_message(chat_id=chat_id, text='Node {} has gone offline'.format(node.nodeId))
+
+                elif previous.status == 'up' and node.status == 'standby':
+                    for chat_id in subbed_nodes[node.nodeId]:
+                        context.bot.send_message(chat_id=chat_id, text='Node {} has gone to sleep'.format(node.nodeId))
+
+                elif previous.status in ('down', 'standby') and node.status == 'up':
+                    for chat_id in subbed_nodes[node.nodeId]:
+                        context.bot.send_message(chat_id=chat_id, text='Node {} has come online'.format(node.nodeId))
+
+                if previous.power['target'] == 'Down' and node.power['target'] == 'Up':
+                    for chat_id in subbed_nodes[node.nodeId]:
+                        context.bot.send_message(chat_id=chat_id, text='Node {} power target changed to "Up"'.format(node.nodeId))
             except:
-                logging.exception('Error retreiving node')
-                # TODO: This shouldn't happen, but if it did, we should probably create the node
-                continue
-
-            # We already tried 3 times, so move on and do again next loop
-            try:
-                proxy_status = check(net, n)
-            except:
-                logging.exception("Error checking grid proxy")
-                continue
-
-            try:
-                previous_status = node.status
-                node.status = proxy_status
-
-                # Yikes! We're 7 indents deep looping over all subscribers again to figure out who to alert. We have to do this because multiple users might be subbed to the same node. TODO: subbed users should be a property of the node. Then we can avoid the part about making set of nodes with active subs above too
-                if previous_status == 'up' and node.status == 'down':
-                    for chat_id, data in context.bot_data['chats'].items():
-                        if n in data['nodes'][net]:
-                            context.bot.send_message(chat_id=chat_id, text='Node {} has gone offline'.format(n))
-
-                elif previous_status == 'up' and node.status == 'standby':
-                    for chat_id, data in context.bot_data['chats'].items():
-                        if n in data['nodes'][net]:
-                            context.bot.send_message(chat_id=chat_id, text='Node {} has gone to sleep'.format(n))
-
-                elif previous_status in ('down', 'standby') and node.status == 'up':
-                    for chat_id, data in context.bot_data['chats'].items():
-                        if n in data['nodes'][net]:
-                            context.bot.send_message(chat_id=chat_id, text='Node {} has come back online'.format(n))
-            
-            except:
-                node.status = proxy_status #Set status for next time
                 logging.exception("Error in alert block")
                 continue
+
+            finally:
+                context.bot_data['nodes'][net][node.nodeId] = node
+
+        # node_ids = set()
+        # for chat_id, data in context.bot_data['chats'].items():
+        #     node_ids |= set(data['nodes'][net])
+            
+        # for n in node_ids:
+        #     try:
+        #         node = context.bot_data['nodes'][net][n]
+        #     except:
+        #         logging.exception('Error retreiving node')
+        #         # TODO: This shouldn't happen, but if it did, we should probably create the node
+        #         continue
+
+        #     # We already tried 3 times, so move on and do again next loop
+        #     try:
+        #         proxy_status = check(net, n)
+        #     except:
+        #         logging.exception("Error checking grid proxy")
+        #         continue
+
+        #     try:
+        #         previous_status = node.status
+        #         node.status = proxy_status
+
+        #         # Yikes! We're 7 indents deep looping over all subscribers again to figure out who to alert. We have to do this because multiple users might be subbed to the same node. TODO: subbed users should be a property of the node. Then we can avoid the part about making set of nodes with active subs above too
+        #         if previous_status == 'up' and node.status == 'down':
+        #             for chat_id, data in context.bot_data['chats'].items():
+        #                 if n in data['nodes'][net]:
+        #                     context.bot.send_message(chat_id=chat_id, text='Node {} has gone offline'.format(n))
+
+        #         elif previous_status == 'up' and node.status == 'standby':
+        #             for chat_id, data in context.bot_data['chats'].items():
+        #                 if n in data['nodes'][net]:
+        #                     context.bot.send_message(chat_id=chat_id, text='Node {} has gone to sleep'.format(n))
+
+        #         elif previous_status in ('down', 'standby') and node.status == 'up':
+        #             for chat_id, data in context.bot_data['chats'].items():
+        #                 if n in data['nodes'][net]:
+        #                     context.bot.send_message(chat_id=chat_id, text='Node {} has come back online'.format(n))
+            
+        #     except:
+        #         node.status = proxy_status #Set status for next time
+        #         logging.exception("Error in alert block")
+        #         continue
 
 
 def format_list(items):
@@ -274,7 +313,16 @@ def initialize_chat(chat_id, context):
     for net in GRID_NETWORKS:
         context.bot_data['chats'][chat_id]['nodes'][net] = []
 
-def migrate_nodes(context: CallbackContext):
+def load_node_file(net, node_ids):
+    """
+    For use in test mode, to emulate get_nodes using data in a file. The updatedAt value is given in the file as a delta of how many seconds in the past and converted to absolute time here
+    """
+    text = open('./test/node', 'r')
+    node = Node(json.loads(text))
+    node.updatedAt = time.time() - node.updatedAt
+    return [node]
+
+def migrate_data(context: CallbackContext):
     """
     Convert dict based node data to instances of Node class. Only needed when updating a bot that has existing data using the old style.
     """
@@ -726,7 +774,7 @@ if args.dump:
     print()
 
 updater.job_queue.run_once(initialize, when=0)
-updater.job_queue.run_once(migrate_nodes, when=0)
+updater.job_queue.run_once(migrate_data, when=0) #Can remove after use
 updater.job_queue.run_repeating(check_job, interval=args.poll, first=0)
 updater.job_queue.run_repeating(log_job, interval=3600, first=0)
 
