@@ -262,7 +262,13 @@ def status_gql(update: Update, context: CallbackContext):
     net = user['net']
 
     if context.args:
-        node = get_nodes(net, context.args)[0]
+        try:
+            node = get_nodes(net, context.args)[0]
+        except IndexError:
+            context.bot.send_message(chat_id=chat_id, text='Node id not valid on {}net'.format(net))
+        except:
+            logging.exception("Failed to fetch node info")
+            context.bot.send_message(chat_id=chat_id, text='Error fetching node data. Please wait a moment and try again.')
         context.bot.send_message(chat_id=chat_id, text='Node {} is {}'.format(node.nodeId, node.status))
 
     else:
