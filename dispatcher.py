@@ -115,6 +115,7 @@ def check_job(context: CallbackContext):
                             context.bot.send_message(chat_id=chat_id, text='Node {} has come back online'.format(n))
             
             except:
+                node.status = proxy_status #Set status for next time
                 logging.exception("Error in alert block")
                 continue
 
@@ -348,6 +349,38 @@ This bot is experimental and probably has bugs. Only you are responsible for you
     '''
     context.bot.send_message(chat_id=chat_id, text=msg)
 
+def status_gql(update: Update, context: CallbackContext):
+    chat_id = update.effective_chat.id
+    try:
+        context.bot_data['chats'][chat_id]
+    except KeyError:
+        initialize_chat(chat_id, context)
+        
+    net = context.bot_data['chats'][chat_id]['net']
+
+    if context.args:
+        node = get_nodes(net, context.args)[0]
+        context.bot.send_message(chat_id=chat_id, text='Node {} is {}'.format(node.nodeId, node.status))
+
+    else:
+        subbed_nodes = context.bot_data['chats'][chat_id]['nodes'][net]
+
+        if subbed_nodes:
+            up, down, standby = [], [], []
+            text = ''
+            nodes = get_nodes(net, subbed_nodes)
+            for node in nodes:
+                if node.status == 'up':
+                    up.append(node.nodeId)
+                elif node.status == 'down':
+                    down.append(node.nodeId)
+                elif node.status == 'standby':
+                    standby.append(node.nodeId)
+            text = format_nodes(up, down, standby)
+            context.bot.send_message(chat_id=chat_id, text=text)
+        else:
+            context.bot.send_message(chat_id=chat_id, text='Please specify a node id')
+
 def status_proxy(update: Update, context: CallbackContext):
     chat_id = update.effective_chat.id
     try:
@@ -496,8 +529,8 @@ def subscribe(update: Update, context: CallbackContext):
             # Check first if they're already subscribed
             if not int(node_id) in subbed_nodes:
                 try:
-                    ip = context.bot_data['nodes'][net][int(node_id)]['ip']
-                    valid_nodes.append((node_id, ip))
+                    context.bot_data['nodes'][net][int(node_id)]
+                    valid_nodes.append(node_id)
                 except KeyError:
                     unknown_nodes.append(node_id)
             else:
@@ -507,7 +540,7 @@ def subscribe(update: Update, context: CallbackContext):
             for node_id in unknown_nodes:
                 try:
                     node = get_nodes(net, [node_id])[0]
-                    valid_nodes.append((node_id, None))
+                    valid_nodes.append(node_id)
                     context.bot_data['nodes'][net][int(node_id)] = node
 
                 # (requests.Timeout, requests.exceptions.ReadTimeout)
@@ -531,7 +564,7 @@ def subscribe(update: Update, context: CallbackContext):
             new_subs = []
             try:
                 for node in valid_nodes:
-                    node_id = int(node[0])
+                    node_id = int(node)
                     # context.bot_data['nodes'][net][node_id]['status'] = check(net, node_id)
                     subbed_nodes.append(node_id)
                     new_subs.append(node_id)
@@ -675,7 +708,7 @@ dispatcher.add_handler(CommandHandler('net', network))
 dispatcher.add_handler(CommandHandler('node_ip', node_ip))
 dispatcher.add_handler(CommandHandler('ping', status_ping))
 dispatcher.add_handler(CommandHandler('start', start))
-dispatcher.add_handler(CommandHandler('status', status_proxy))
+dispatcher.add_handler(CommandHandler('status', status_gql))
 dispatcher.add_handler(CommandHandler('subscribe', subscribe))
 dispatcher.add_handler(CommandHandler('sub', subscribe))
 dispatcher.add_handler(CommandHandler('unsubscribe', unsubscribe))
