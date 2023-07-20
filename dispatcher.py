@@ -10,15 +10,24 @@ from gql.transport.exceptions import TransportServerError
 import grid_graphql
 from grid_types import Node
 
-GRID_NETWORKS = ['main', 'test', 'dev']
+from rmb import RmbClient, RmbPeer
+
+NETWORKS = ['main', 'test', 'dev']
+DEFAULT_PING_TIMEOUT = 10
 
 parser = argparse.ArgumentParser()
 parser.add_argument('token', help='Specify a bot token')
-parser.add_argument('-v', '--verbose', help='Verbose output', action="store_true")
-parser.add_argument('-p', '--poll', help='Set polling frequency in seconds', type=int, default=300)
-parser.add_argument('-l', '--logs', help='Specify how many lines the log file must grow before a notification is sent to the admin', type=int, default=10)
+parser.add_argument('-s', '--secret', 
+                    help='A TF Chain secret for use with RMB', type=str)
+parser.add_argument('-v', '--verbose', help='Verbose output', 
+                    action="store_true")
+parser.add_argument('-p', '--poll', help='Set polling frequency in seconds', 
+                    type=int, default=300)
+parser.add_argument('-l', '--logs', 
+                    help='Specify how many lines the log file must grow before a notification is sent to the admin', type=int, default=10)
 parser.add_argument('-a', '--admin', help='Set the admin chat id', type=int)
-parser.add_argument('-t', '--test', help='Enable test feature', action="store_true")
+parser.add_argument('-t', '--test', help='Enable test feature', 
+                    action="store_true")
 parser.add_argument('-d', '--dump', help='Dump bot data', action="store_true")
 args = parser.parse_args()
 
@@ -37,6 +46,17 @@ graphqls = {'main': mainnet_gql,
             'test': testnet_gql,
             'dev': devnet_gql}
 
+if args.secret is None:
+    print('Secret is required for RMB functions. Please specify with -s or --secret')
+    exit()
+
+rmb_peers = {net: RmbPeer(args.secret, net, net + '-rmb-peer.log',
+                          spawn_redis=True, redis_port=None,
+                          redis_logfile=net + '-redis.log')
+             for net in NETWORKS}
+
+rmb_clients = {net: RmbClient(rmb_peers[net].redis_port) for net in NETWORKS}
+
 if args.verbose:
     log_level = logging.INFO
 
@@ -46,13 +66,19 @@ if args.verbose:
 else:
     log_level = logging.WARNING
 
-logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=log_level)
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=log_level, 
+    handlers=[logging.FileHandler('logs'), logging.StreamHandler()])
+
+def check_chat(update: Update, context: CallbackContext):
+    chat = update.effective_chat.id
+    context.bot.send_message(chat_id=chat, text='Your chat id is {}'.format(chat))
 
 def check_job(context: CallbackContext):
     """
-    The main attraction, when it's working properly. This function collects all the node ids that have an active subscription, checks their status via both proxy and ping, then sends alerts to users whose nodes have a status change.
+    The main attraction. This function collects all the node ids that have an active subscription, checks their status via both proxy and ping, then sends alerts to users whose nodes have a status change.
     """
-    for net in GRID_NETWORKS:
+    for net in NETWORKS:
         # First gather all actively subscribed nodes and note who is subscribed
         try:
             subbed_nodes = {}
@@ -71,23 +97,23 @@ def check_job(context: CallbackContext):
 
                 if previous.status == 'up' and node.status == 'down':
                     for chat_id in subbed_nodes[node.nodeId]:
-                        context.bot.send_message(chat_id=chat_id, text='Node {} has gone offline'.format(node.nodeId))
+                        context.bot.send_message(chat_id=chat_id, text='Node {} has gone offline \N{warning sign}'.format(node.nodeId))
 
                 elif previous.status == 'up' and node.status == 'standby':
                     for chat_id in subbed_nodes[node.nodeId]:
-                        context.bot.send_message(chat_id=chat_id, text='Node {} has gone to sleep'.format(node.nodeId))
+                        context.bot.send_message(chat_id=chat_id, text='Node {} has gone to sleep \N{last quarter moon with face}'.format(node.nodeId))
 
                 elif previous.status == 'standby' and node.status == 'down':
                     for chat_id in subbed_nodes[node.nodeId]:
-                        context.bot.send_message(chat_id=chat_id, text='Node {} did not wake up within 24 hours'.format(node.nodeId))
+                        context.bot.send_message(chat_id=chat_id, text='Node {} did not wake up within 24 hours \N{warning sign}'.format(node.nodeId))
 
                 elif previous.status in ('down', 'standby') and node.status == 'up':
                     for chat_id in subbed_nodes[node.nodeId]:
-                        context.bot.send_message(chat_id=chat_id, text='Node {} has come online'.format(node.nodeId))
+                        context.bot.send_message(chat_id=chat_id, text='Node {} has come online \N{electric light bulb}'.format(node.nodeId))
 
                 if previous.power['target'] == 'Down' and node.power['target'] == 'Up':
                     for chat_id in subbed_nodes[node.nodeId]:
-                        context.bot.send_message(chat_id=chat_id, text='Node {} wake up initiated'.format(node.nodeId))
+                        context.bot.send_message(chat_id=chat_id, text='Node {} wake up initiated \N{hot beverage}'.format(node.nodeId))
             except:
                 logging.exception("Error in alert block")
 
@@ -114,31 +140,33 @@ def format_nodes(up, down, standby):
 
     if up:
         text += '<b><u>Up nodes:</u></b>\n'
-        for node in up:
-            text += str(node) + '\n'
+        format_verticle_list(up)
     if down:
         if up:
             text += '\n'
         text += '<b><u>Down nodes:</u></b>\n'
-        for node in down:
-            text += str(node) + '\n'
-
+        format_verticle_list(down)
     if standby:
         if up or down:
             text += '\n'
         text += '<b><u>Standby nodes:</u></b>\n'
-        for node in standby:
-            text += str(node) + '\n'
+        format_verticle_list(standby)
 
     return text
 
+def format_verticle_list(items):
+    text = ''
+    for item in items:
+        text += str(item) + '\n'
+    return text
 
 def get_nodes(net, node_ids):
     """
-    Query a list of node ids in GraphQL, create Node objects for consistency and easy field acces, then assign them a status and return them.
+    Query a list of node ids in GraphQL, create Node objects for consistency and easy field access, then assign them a status and return them.
     """
     graphql = graphqls[net]
-    nodes = graphql.nodes(['nodeID', 'updatedAt', 'power'], nodeID_in=node_ids)
+    nodes = graphql.nodes(['nodeID', 'twinID', 'updatedAt', 'power'], 
+                          nodeID_in=node_ids)
     nodes = [Node(node) for node in nodes]
 
     one_hour_ago = time.time() - 60 * 60
@@ -182,25 +210,22 @@ def initialize(context: CallbackContext):
     for key in ['chats', 'nodes']:
         context.bot_data.setdefault(key, {})
 
-    for net in GRID_NETWORKS:
+    for net in NETWORKS:
         context.bot_data['nodes'].setdefault(net, {})
 
     subs = 0
     for chat, data in context.bot_data['chats'].items():
-        for net in GRID_NETWORKS:
+        for net in NETWORKS:
             if data['nodes'][net]:
                 subs += 1
                 break
     print('{} chats and {} subscribed users'.format(len(context.bot_data['chats']), subs))
 
-def new_user():
-    return {'net': 'main', 'nodes': {'main': [], 'test': [], 'dev': []}}
-
 def migrate_data(context: CallbackContext):
     """
     Convert dict based node data to instances of Node class. Only needed when updating a bot that has existing data using the old style.
     """
-    for net in GRID_NETWORKS:
+    for net in NETWORKS:
         nodes = context.bot_data['nodes'][net]
         for node_id in nodes.keys():
             if type(nodes[node_id]) is dict:
@@ -214,7 +239,7 @@ def network(update: Update, context: CallbackContext):
     user = context.bot_data['chats'].setdefault(chat_id, new_user())
     if context.args:
         net = context.args[0]
-        if net in GRID_NETWORKS:
+        if net in NETWORKS:
             user['net'] = net
             context.bot.send_message(chat_id=chat_id, text='Set network to {}net'.format(net))
         else:
@@ -222,6 +247,29 @@ def network(update: Update, context: CallbackContext):
     else:
         net = user['net']
         context.bot.send_message(chat_id=chat_id, text='Network is set to {}net'.format(net))
+
+def new_user():
+    return {'net': 'main', 'nodes': {'main': [], 'test': [], 'dev': []}}
+
+def ping_rmb(net, nodes, timeout):
+    """
+    Ping one or more nodes via RMB.
+    """
+    client = rmb_clients[net]
+    twins = [node.twinId for node in nodes]
+    client.send('zos.statistics.get', twins, exp_delta=timeout)
+
+    finished = time.time() + timeout
+    replies = []
+    remaining = timeout
+    while remaining > 0:
+        if reply := client.receive(remaining):
+            replies.append(reply)
+        remaining = finished - time.time()
+
+    twins_replied = [int(reply['src']) for reply in replies]
+    up_nodes = [node for node in nodes if node.twinId in twins_replied]
+    return up_nodes
 
 def start(update: Update, context: CallbackContext):
     chat_id = update.effective_chat.id
@@ -289,68 +337,50 @@ def status_gql(update: Update, context: CallbackContext):
 
 def status_ping(update: Update, context: CallbackContext):
     """
-    Get the node status using a ping over Yggdrasil, rather than checking grid proxy. This gives more real time data, but can fail if Yggdrasil is having issues. Refresh the node on each check, because they can sometimes change.
+    Get the node status using a ping over RMB.
     """
 
     chat_id = update.effective_chat.id
-
-    context.bot.send_message(chat_id=chat_id, text="/ping is disabled for now, until an implementation based on the new RMB is ready. Please stay tuned for an announcement on the bot's channel: https://t.me/node_bot_updates")
-
-    return
-
-    ###################################################################
-    # DISABLED FOR NOW, WE CAN'T GET THE YGGDRASIL IPS FROM GQL ANYMORE
-    ###################################################################
-
     user = context.bot_data['chats'].setdefault(chat_id, new_user())
-
-
+    try:
+        timeout = user['timeout']
+    except KeyError:
+        timeout = DEFAULT_PING_TIMEOUT
     net = user['net']
+
     if context.args:
-        node = context.args[0]
-        if not check_valid(net, node):
-            context.bot.send_message(chat_id=chat_id, text='Node with that id not found on this network. Please double check the node id and try again')
-            return
-
         try:
-            update_node_ip(net, node, context)
-            ip = (int(node), context.bot_data['nodes'][net][int(node)]['ip'])
-        # With update_node_ip, we'll only hit this path if grid proxy is down
-        except KeyError:
-            context.bot.send_message(chat_id=chat_id, text='Fetching node details...')
-            try:
-                ip = get_node_ips(net, [node])[0]
-            except:
-                context.bot.send_message(chat_id=chat_id, text='Error fetching node details. If this issue persists, please notify @scottyeager')
-                raise
-            if ip:
-                context.bot_data['nodes'][net][ip[0]] = {'ip': ip[1]}
+            node_ids = [int(arg) for arg in context.args]
+        except ValueError:
+            context.bot.send_message(chat_id=chat_id, text='There was a problem processing your input. This command accepts one or more node ids separated by a space.')
+            return
+        
+        nodes = get_nodes(net, node_ids)
+        context.bot.send_message(chat_id=chat_id, 
+                                 text='Pinging with {} second timeout...'
+                                      .format(timeout))
+        up_nodes = ping_rmb(net, nodes, timeout)
 
-        context.bot.send_message(chat_id=chat_id, text='Pinging node {}. One moment...'.format(ip[0]))
-        stat = ping(ip[1])
-        # context.bot_data['nodes'][net][ip[0]]['status'] = stat
-        context.bot.send_message(chat_id=chat_id, text='Node {} is {}'.format(node, stat))
-
-    else:
-        subbed_nodes = user['nodes'][net]
-        if subbed_nodes:
-            if len(subbed_nodes) == 1:
-                context.bot.send_message(chat_id=chat_id, text='Pinging node {}. One moment...'.format(subbed_nodes[0]))
+        if len(nodes) == 1:
+            if up_nodes:
+                context.bot.send_message(chat_id=chat_id, text='Node {} responded successfully.')
             else:
-                context.bot.send_message(chat_id=chat_id, text='Pinging {} nodes. One moment...'.format(len(subbed_nodes)))
-            up, down = [], []
-            for node in subbed_nodes:
-                update_node_ip(net, node, context)
-                stat = ping(context.bot_data['nodes'][net][int(node)]['ip'])
-                if stat == 'up':
-                    up.append(node)
-                elif stat == 'down':
-                    down.append(node)
-
-            text = format_nodes(up, down)
-            context.bot.send_message(chat_id=chat_id, text=text)
+                context.bot.send_message(chat_id=chat_id, text='Node {} did not respond.')
+                
         else:
-            context.bot.send_message(chat_id=chat_id, text='Please specify a node id')
+            msg = ''
+            if up_nodes:
+                msg += '<b><u>Responsive nodes:</u></b>\n'
+                msg += format_verticle_list([node.nodeId for node in up_nodes])
+
+            if len(up_nodes) < len(nodes):
+                rest = [node.nodeId for node in nodes if node not in up_nodes]
+                if up_nodes:
+                    msg += '\n'
+                msg += '<b><u>Unresponsive nodes:</u></b>\n'
+                msg += format_verticle_list(rest)
+
+        context.bot.send_message(chat_id=chat_id, text=msg)
 
 def subscribe(update: Update, context: CallbackContext):
     chat_id = update.effective_chat.id
@@ -393,6 +423,30 @@ def subscribe(update: Update, context: CallbackContext):
     subbed_nodes.extend(new_nodes)
     context.bot.send_message(chat_id=chat_id, text=msg)
 
+def timeout(update: Update, context: CallbackContext):
+    """
+    Sets a custom ping timeout for the user.
+    """
+    chat_id = update.effective_chat.id
+    user = context.bot_data['chats'].setdefault(chat_id, new_user())
+
+    if context.args:
+        try:
+            timeout = int(context.args[0])
+        except ValueError:
+            context.bot.send_message(chat_id=chat_id, text='There was a problem processing your input. This command accepts a whole number timeout value in seconds')
+            return
+
+        user['timeout'] = timeout
+        context.bot.send_message(chat_id=chat_id, text='Ping timeout successfully set to {} seconds.'.format(timeout))
+
+    else:
+        try:
+            timeout = user['timeout']
+        except KeyError:
+            timeout = DEFAULT_PING_TIMEOUT
+        context.bot.send_message(chat_id=chat_id, text='Timeout currently set for {} seconds.'.format(timeout))
+
 def unsubscribe(update: Update, context: CallbackContext):
     chat_id = update.effective_chat.id
     user = context.bot_data['chats'].setdefault(chat_id, new_user())
@@ -415,15 +469,11 @@ def unsubscribe(update: Update, context: CallbackContext):
             else:
                 context.bot.send_message(chat_id=chat_id, text='No valid and subscribed node ids found.')
         elif context.args[0] == 'all':
-            for net in GRID_NETWORKS:
+            for net in NETWORKS:
                 user['nodes'][net] = []
             context.bot.send_message(chat_id=chat_id, text='You have been unsubscribed from all updates')
         else:
             context.bot.send_message(chat_id=chat_id, text='Please write "/unsubscribe all" if you wish to remove all subscribed nodes.')
-
-def check_chat(update: Update, context: CallbackContext):
-    chat = update.effective_chat.id
-    context.bot.send_message(chat_id=chat, text='Your chat id is {}'.format(chat))
 
 def send_logs(update: Update, context: CallbackContext):
     if update.effective_chat.id != args.admin:
@@ -463,6 +513,7 @@ dispatcher.add_handler(CommandHandler('start', start))
 dispatcher.add_handler(CommandHandler('status', status_gql))
 dispatcher.add_handler(CommandHandler('subscribe', subscribe))
 dispatcher.add_handler(CommandHandler('sub', subscribe))
+dispatcher.add_handler(CommandHandler('timeout', timeout))
 dispatcher.add_handler(CommandHandler('unsubscribe', unsubscribe))
 dispatcher.add_handler(CommandHandler('unsub', unsubscribe))
 
@@ -472,7 +523,6 @@ dispatcher.add_handler(CommandHandler('logs', send_logs))
 if args.test:
     import json
     get_nodes = get_nodes_from_file
-    dispatcher.add_handler(CommandHandler('test', test))
 
 if args.dump:
     print('Bot data:')
