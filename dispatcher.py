@@ -262,9 +262,10 @@ def ping_rmb(net, nodes, timeout):
     finished = time.time() + timeout
     replies = []
     remaining = timeout
-    while remaining > 0:
+    while remaining > 0 and len(replies) < len(nodes):
         if reply := client.receive(remaining):
             replies.append(reply)
+
         remaining = finished - time.time()
 
     twins_replied = [int(reply['src']) for reply in replies]
@@ -356,6 +357,10 @@ def status_ping(update: Update, context: CallbackContext):
             return
         
         nodes = get_nodes(net, node_ids)
+        if not nodes:
+            context.bot.send_message(chat_id=chat_id, text='There was a problem processing your input. No valid node ids for this network.')
+            return
+
         context.bot.send_message(chat_id=chat_id, 
                                  text='Pinging with {} second timeout...'
                                       .format(timeout))
@@ -363,10 +368,10 @@ def status_ping(update: Update, context: CallbackContext):
 
         if len(nodes) == 1:
             if up_nodes:
-                context.bot.send_message(chat_id=chat_id, text='Node {} responded successfully.')
+                context.bot.send_message(chat_id=chat_id, text='Node {} responded successfully.'.format(nodes[0].nodeId))
             else:
-                context.bot.send_message(chat_id=chat_id, text='Node {} did not respond.')
-                
+                context.bot.send_message(chat_id=chat_id, text='Node {} did not respond.'.format(nodes[0].nodeId))
+
         else:
             msg = ''
             if up_nodes:
@@ -380,7 +385,7 @@ def status_ping(update: Update, context: CallbackContext):
                 msg += '<b><u>Unresponsive nodes:</u></b>\n'
                 msg += format_verticle_list(rest)
 
-        context.bot.send_message(chat_id=chat_id, text=msg)
+            context.bot.send_message(chat_id=chat_id, text=msg)
 
 def subscribe(update: Update, context: CallbackContext):
     chat_id = update.effective_chat.id
@@ -393,8 +398,8 @@ def subscribe(update: Update, context: CallbackContext):
     if context.args:
         try:
             for arg in context.args:
-                nodes.append(int(arg))
-        except:
+                node_ids.append(int(arg))
+        except ValueError:
             context.bot.send_message(chat_id=chat_id, text='There was a problem processing your input. This command accepts one or more node ids separated by a space.')
             return
     else:
@@ -407,7 +412,9 @@ def subscribe(update: Update, context: CallbackContext):
     
     try:
         new_ids = [n for n in node_ids if n not in subbed_nodes]
-        new_nodes = get_nodes(net, new_ids)
+        new_nodes = [node.nodeId for node in get_nodes(net, new_ids)]
+        #Do this to preserve the order since gql will not
+        new_subs = [n for n in node_ids if n in new_nodes] 
     
     except:
         logging.exception("Failed to fetch node info")
@@ -418,9 +425,9 @@ def subscribe(update: Update, context: CallbackContext):
     msg = 'You have been successfully subscribed to node' + format_list(new_subs)
 
     if subbed_nodes:
-        msg += '\n\nYou are now subscribed to node' + format_list(subbed_nodes + new_nodes)
+        msg += '\n\nYou are now subscribed to node' + format_list(subbed_nodes + new_subs)
     
-    subbed_nodes.extend(new_nodes)
+    subbed_nodes.extend(new_subs)
     context.bot.send_message(chat_id=chat_id, text=msg)
 
 def timeout(update: Update, context: CallbackContext):
@@ -454,7 +461,12 @@ def unsubscribe(update: Update, context: CallbackContext):
     if len(user['nodes']) == 0:
         context.bot.send_message(chat_id=chat_id, text="You weren't subscribed to any updates.")
     else:
-        if context.args:
+        if context.args[0] == 'all':
+            for net in NETWORKS:
+                user['nodes'][net] = []
+            context.bot.send_message(chat_id=chat_id, text='You have been unsubscribed from all updates')
+
+        elif context.args:
             removed_nodes = []
             net = user['net']
             subbed_nodes = user['nodes'][net]
@@ -468,10 +480,7 @@ def unsubscribe(update: Update, context: CallbackContext):
                 context.bot.send_message(chat_id=chat_id, text='You have been unsubscribed from node' + format_list(removed_nodes))
             else:
                 context.bot.send_message(chat_id=chat_id, text='No valid and subscribed node ids found.')
-        elif context.args[0] == 'all':
-            for net in NETWORKS:
-                user['nodes'][net] = []
-            context.bot.send_message(chat_id=chat_id, text='You have been unsubscribed from all updates')
+                
         else:
             context.bot.send_message(chat_id=chat_id, text='Please write "/unsubscribe all" if you wish to remove all subscribed nodes.')
 
@@ -498,7 +507,7 @@ def log_job(context: CallbackContext):
     with open('logs', 'r') as logs:
         log_length = sum(1 for line in logs)
 
-    last_length = context.bot_data.set_default('last_log_length', log_length)
+    last_length = context.bot_data.setdefault('last_log_length', log_length)
 
     if log_length - last_length > args.logs and args.admin:
         context.bot.send_message(chat_id=args.admin, text='Log file has grown by {} lines. Houston, we have a ...?'.format(args.logs))
