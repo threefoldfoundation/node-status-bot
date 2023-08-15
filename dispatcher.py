@@ -22,7 +22,7 @@ parser.add_argument('-s', '--secret',
 parser.add_argument('-v', '--verbose', help='Verbose output', 
                     action="store_true")
 parser.add_argument('-p', '--poll', help='Set polling frequency in seconds', 
-                    type=int, default=300)
+                    type=int, default=60)
 parser.add_argument('-l', '--logs', 
                     help='Specify how many lines the log file must grow before a notification is sent to the admin', type=int, default=10)
 parser.add_argument('-a', '--admin', help='Set the admin chat id', type=int)
@@ -94,6 +94,10 @@ def check_job(context: CallbackContext):
         for node in nodes:
             try:
                 previous = context.bot_data['nodes'][net][node.nodeId]
+                
+                if previous.power['target'] == 'Down' and node.power['target'] == 'Up':
+                    for chat_id in subbed_nodes[node.nodeId]:
+                        context.bot.send_message(chat_id=chat_id, text='Node {} wake up initiated \N{hot beverage}'.format(node.nodeId))
 
                 if previous.status == 'up' and node.status == 'down':
                     for chat_id in subbed_nodes[node.nodeId]:
@@ -111,9 +115,6 @@ def check_job(context: CallbackContext):
                     for chat_id in subbed_nodes[node.nodeId]:
                         context.bot.send_message(chat_id=chat_id, text='Node {} has come online \N{electric light bulb}'.format(node.nodeId))
 
-                if previous.power['target'] == 'Down' and node.power['target'] == 'Up':
-                    for chat_id in subbed_nodes[node.nodeId]:
-                        context.bot.send_message(chat_id=chat_id, text='Node {} wake up initiated \N{hot beverage}'.format(node.nodeId))
             except:
                 logging.exception("Error in alert block")
 
@@ -140,17 +141,17 @@ def format_nodes(up, down, standby):
 
     if up:
         text += '<b><u>Up nodes:</u></b>\n'
-        format_verticle_list(up)
+        text += format_verticle_list(up)
     if down:
         if up:
             text += '\n'
         text += '<b><u>Down nodes:</u></b>\n'
-        format_verticle_list(down)
+        text += format_verticle_list(down)
     if standby:
         if up or down:
             text += '\n'
         text += '<b><u>Standby nodes:</u></b>\n'
-        format_verticle_list(standby)
+        text += format_verticle_list(standby)
 
     return text
 
@@ -331,6 +332,7 @@ def status_gql(update: Update, context: CallbackContext):
                     down.append(node.nodeId)
                 elif node.status == 'standby':
                     standby.append(node.nodeId)
+            print(up, down, standby)
             text = format_nodes(up, down, standby)
             context.bot.send_message(chat_id=chat_id, text=text)
         else:
@@ -412,7 +414,8 @@ def subscribe(update: Update, context: CallbackContext):
     
     try:
         new_ids = [n for n in node_ids if n not in subbed_nodes]
-        new_nodes = [node.nodeId for node in get_nodes(net, new_ids)]
+        new_nodes = {node.nodeId: node for node in get_nodes(net, new_ids)}
+        context.bot_data['nodes'][net].update(new_nodes)
         #Do this to preserve the order since gql will not
         new_subs = [n for n in node_ids if n in new_nodes] 
     
@@ -461,7 +464,7 @@ def unsubscribe(update: Update, context: CallbackContext):
     if len(user['nodes']) == 0:
         context.bot.send_message(chat_id=chat_id, text="You weren't subscribed to any updates.")
     else:
-        if context.args[0] == 'all':
+        if context.args and context.args[0] == 'all':
             for net in NETWORKS:
                 user['nodes'][net] = []
             context.bot.send_message(chat_id=chat_id, text='You have been unsubscribed from all updates')
@@ -480,7 +483,7 @@ def unsubscribe(update: Update, context: CallbackContext):
                 context.bot.send_message(chat_id=chat_id, text='You have been unsubscribed from node' + format_list(removed_nodes))
             else:
                 context.bot.send_message(chat_id=chat_id, text='No valid and subscribed node ids found.')
-                
+
         else:
             context.bot.send_message(chat_id=chat_id, text='Please write "/unsubscribe all" if you wish to remove all subscribed nodes.')
 
@@ -545,3 +548,7 @@ updater.job_queue.run_repeating(log_job, interval=3600, first=0)
 
 updater.start_polling()
 updater.idle()
+
+for peer in rmb_peers.values():
+    peer.redis.kill()
+    peer.peer.kill()
