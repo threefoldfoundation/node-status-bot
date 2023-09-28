@@ -76,7 +76,7 @@ def check_chat(update: Update, context: CallbackContext):
 
 def check_job(context: CallbackContext):
     """
-    The main attraction. This function collects all the node ids that have an active subscription, checks their status via both proxy and ping, then sends alerts to users whose nodes have a status change.
+    The main attraction. This function collects all the node ids that have an active subscription, checks their status, then sends alerts to users whose nodes have a status change.
     """
     for net in NETWORKS:
         # First gather all actively subscribed nodes and note who is subscribed
@@ -94,7 +94,7 @@ def check_job(context: CallbackContext):
         for node in nodes:
             try:
                 previous = context.bot_data['nodes'][net][node.nodeId]
-                
+
                 if previous.power['target'] == 'Down' and node.power['target'] == 'Up':
                     for chat_id in subbed_nodes[node.nodeId]:
                         context.bot.send_message(chat_id=chat_id, text='Node {} wake up initiated \N{hot beverage}'.format(node.nodeId))
@@ -173,6 +173,8 @@ def get_nodes(net, node_ids):
     one_hour_ago = time.time() - 60 * 60
 
     for node in nodes:
+        if node.power is None: 
+            node.power = {'state': None, 'target': None}
         node.status = get_node_status(node)
 
     return nodes
@@ -332,7 +334,6 @@ def status_gql(update: Update, context: CallbackContext):
                     down.append(node.nodeId)
                 elif node.status == 'standby':
                     standby.append(node.nodeId)
-            print(up, down, standby)
             text = format_nodes(up, down, standby)
             context.bot.send_message(chat_id=chat_id, text=text)
         else:
@@ -415,15 +416,17 @@ def subscribe(update: Update, context: CallbackContext):
     try:
         new_ids = [n for n in node_ids if n not in subbed_nodes]
         new_nodes = {node.nodeId: node for node in get_nodes(net, new_ids)}
+        if not new_nodes:
+            context.bot.send_message(chat_id=chat_id, text='No valid node ids found.')
+            return
         context.bot_data['nodes'][net].update(new_nodes)
         #Do this to preserve the order since gql will not
-        new_subs = [n for n in node_ids if n in new_nodes] 
+        new_subs = [n for n in node_ids if n in new_nodes]
     
     except:
         logging.exception("Failed to fetch node info")
         context.bot.send_message(chat_id=chat_id, text='Error fetching node data. Please wait a moment and try again.')
         return
-
 
     msg = 'You have been successfully subscribed to node' + format_list(new_subs)
 
