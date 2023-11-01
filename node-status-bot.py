@@ -7,10 +7,10 @@ from gql import Client, gql
 from gql.transport.requests import RequestsHTTPTransport
 from gql.transport.exceptions import TransportServerError
 
-import grid_graphql
-from grid_types import Node
+import grid3.graphql
+from grid3.types import Node
 
-from rmb import RmbClient, RmbPeer
+from grid3.rmb import RmbClient, RmbPeer
 
 NETWORKS = ['main', 'test', 'dev']
 DEFAULT_PING_TIMEOUT = 10
@@ -38,9 +38,9 @@ updater = Updater(token=args.token, persistence=pickler, use_context=True, defau
 
 dispatcher = updater.dispatcher
 
-mainnet_gql = grid_graphql.GraphQL('https://graphql.grid.tf/graphql')
-testnet_gql = grid_graphql.GraphQL('https://graphql.test.grid.tf/graphql')
-devnet_gql = grid_graphql.GraphQL('https://graphql.dev.grid.tf/graphql')
+mainnet_gql = grid3.graphql.GraphQL('https://graphql.grid.tf/graphql')
+testnet_gql = grid3.graphql.GraphQL('https://graphql.test.grid.tf/graphql')
+devnet_gql = grid3.graphql.GraphQL('https://graphql.dev.grid.tf/graphql')
 
 graphqls = {'main': mainnet_gql,
             'test': testnet_gql,
