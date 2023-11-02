@@ -14,7 +14,7 @@ git clone https://github.com/threefoldfoundation/node-status-bot.git
 cd node-status-bot
 python -m venv venv
 source venv/bin/activate
-pip install requirements.txt
+pip install -r requirements.txt
 wget https://github.com/threefoldtech/rmb-rs/releases/download/v1.0.7/rmb-peer
 chmod u+x rmb-peer
 ```
