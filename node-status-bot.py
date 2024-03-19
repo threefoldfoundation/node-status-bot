@@ -281,7 +281,7 @@ def ping_rmb(net, nodes, timeout):
 
 def send_message(context, chat_id, text):
     try:
-        send_message(context, chat_id, text=text)
+        context.bot.send_message(chat_id=chat_id, text=text)
     except telegram.error.Unauthorized:
         # User blocked the bot or deleted their account
         pass
