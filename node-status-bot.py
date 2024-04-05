@@ -12,7 +12,7 @@ from gql.transport.exceptions import TransportServerError
 import grid3.graphql
 from grid3.types import Node
 
-from grid3.rmb import RmbClient, RmbPeer
+# from grid3.rmb import RmbClient, RmbPeer
 
 NETWORKS = ['main', 'test', 'dev']
 DEFAULT_PING_TIMEOUT = 10
@@ -48,16 +48,17 @@ graphqls = {'main': mainnet_gql,
             'test': testnet_gql,
             'dev': devnet_gql}
 
-if args.secret is None:
-    print('Secret is required for RMB functions. Please specify with -s or --secret')
-    exit()
+# Ping is disabled for now
+# if args.secret is None:
+#     print('Secret is required for RMB functions. Please specify with -s or --secret')
+#     exit()
 
-rmb_peers = {net: RmbPeer(args.secret, net, net + '-rmb-peer.log',
-                          spawn_redis=True, redis_port=None,
-                          redis_logfile=net + '-redis.log')
-             for net in NETWORKS}
+# rmb_peers = {net: RmbPeer(args.secret, net, net + '-rmb-peer.log',
+#                           spawn_redis=True, redis_port=None,
+#                           redis_logfile=net + '-redis.log')
+#              for net in NETWORKS}
 
-rmb_clients = {net: RmbClient(rmb_peers[net].redis_port) for net in NETWORKS}
+# rmb_clients = {net: RmbClient(rmb_peers[net].redis_port) for net in NETWORKS}
 
 if args.verbose:
     log_level = logging.INFO
@@ -359,6 +360,10 @@ def status_ping(update: Update, context: CallbackContext):
 
     chat_id = update.effective_chat.id
     user = context.bot_data['chats'].setdefault(chat_id, new_user())
+
+    send_message(context, chat_id, text='Ping is disabled for now.')
+    return
+
     try:
         timeout = user['timeout']
     except KeyError:
@@ -565,6 +570,7 @@ updater.job_queue.run_repeating(log_job, interval=3600, first=0)
 updater.start_polling()
 updater.idle()
 
-for peer in rmb_peers.values():
-    peer.redis.kill()
-    peer.peer.kill()
+# Ping is disabled for now
+# for peer in rmb_peers.values():
+#     peer.redis.kill()
+#     peer.peer.kill()
