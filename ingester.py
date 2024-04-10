@@ -13,21 +13,15 @@ DBFILE = sys.argv[1]
 START = int(sys.argv[2])
 END = int(sys.argv[3])
 
-# First build some maps to help us figure out which node is connected with which account. We grab the full list of twins here, because some nodes are deleted and we'll need to look them up from the chain later
-graphql = grid3.network.GridNetwork().graphql
-nodes = graphql.nodes(['nodeID', 'twinID'])
-twins = graphql.twins(['twinID', 'accountID'])
-twin_to_node = {n['twinID']: n['nodeID'] for n in nodes}
-account_to_twin = {t['accountID']: t['twinID'] for t in twins}
-twin_to_account = {v: k for k, v in account_to_twin.items()}
-account_to_node = {twin_to_account[n['twinID']]: n['nodeID'] for n in nodes}
-
-def lookup_node(address, chain):
-    try:
-        return account_to_node[address]
-    except KeyError:
-        node = chain.get_node_by_twin(account_to_twin[address])
-        account_to_node[address] = node
+def lookup_node(address, chain, con):
+    result = con.execute('SELECT * FROM nodes WHERE address=?', [address]).fetchone()
+    if result:
+        return result[0]
+    else:
+        twin = chain.get_twin_by_account(address)
+        node = chain.get_node_by_twin(twin)
+        con.execute("INSERT INTO nodes VALUES(?, ?, ?)", (node, twin, address))
+        con.commit()
         return node
 
 # This is the call signature we'd need for the substrate client's subscription to new blocks feature. Probably just make a wrapper function that throws away the extra args
@@ -45,7 +39,7 @@ def process_block(chain, block_number, con):
             data = extrinsic.value
             if data['call']['call_function'] == 'report_uptime_v2':
                 uptime = data['call']['call_args'][0]['value']
-                node = lookup_node(data['address'], chain)
+                node = lookup_node(data['address'], chain, con)
                 con.execute("INSERT INTO uptimes VALUES(?, ?, ?)", (node, uptime, timestamp))
             elif data['call']['call_function'] == 'change_power_target':
                 target = data['call']['call_args'][1]['value']
@@ -67,16 +61,16 @@ def processor(blocks):
         if block_number % 100 == 0:
             print('Processing block', block_number, 'at', datetime.datetime.now(), 'Blocks remaining:', blocks.qsize())
 
-        try:
-            process_block(main, block_number, con)
-        except:
-            logging.exception('Error while processing block')
-            # Just toss it back on the stack for another thread to retry. Whatever is going wrong with out substrate client is not recoverable by a plain retry. It's okay, we'll have plenty of threads left so this one can just die
-            # TODO: This can make an infinite loop tho. Better do something else
-            blocks.put(block_number)
+        process_block(main, block_number, con)
+
+        # Seems like a nice idea as part of some retry scheme, but generates huge log spam about AttributeError: 'NoneType' object has no attribute 'portable_registry'
+        # try:
+        #     process_block(main, block_number, con)
+        # except:
+        #     logging.exception('Error while processing block')
 
 def parallelize(start, end):
-    con = sqlite3.connect(DBFILE)
+    con = sqlite3.connect(DBFILE, timeout=15)
     main = tfchain.TFChain()
     blocks = queue.Queue()
     results = con.execute("SELECT * from processed_blocks").fetchall()
@@ -88,13 +82,10 @@ def parallelize(start, end):
     print('Starting', WORKERS, 'workers to process', blocks.qsize(), 'blocks')
     for i in range(WORKERS):
         threading.Thread(target=processor, args=[blocks]).start()
-        # Try staggering their starts a bit to see if this helps with db lock
-        time.sleep(1)
 
     blocks.join()
 
-def prep_db():
-    con = sqlite3.connect(DBFILE)
+def prep_db(con):
     #TODO: all tables should have a UNIQUE contraint to avoid duplicates
     con.execute("CREATE TABLE IF NOT EXISTS uptimes(node, uptime, timestamp)")
     con.execute("CREATE TABLE IF NOT EXISTS power_target_changes(node, target, timestamp)")
@@ -103,5 +94,20 @@ def prep_db():
     con.execute("CREATE TABLE IF NOT EXISTS nodes(node_id, twin_id, address)")
     con.commit()
 
-prep_db()
+def populate_nodes(con):
+    if con.execute('SELECT COUNT(*) FROM nodes').fetchone()[0] == 0:
+        graphql = grid3.network.GridNetwork().graphql
+        nodes = graphql.nodes(['nodeID', 'twinID'])
+        twins = graphql.twins(['twinID', 'accountID'])
+        twin_to_account = {t['twinID']: t['accountID'] for t in twins}
+
+        for node in nodes:
+            twin = node['twinID']
+            con.execute("INSERT INTO nodes VALUES(?, ?, ?)", (node['nodeID'], twin, twin_to_account[twin]))
+
+        con.commit()
+
+con = sqlite3.connect(DBFILE)
+prep_db(con)
+populate_nodes(con)
 parallelize(START, END)
