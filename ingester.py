@@ -1,8 +1,9 @@
-import sqlite3, datetime, threading, queue, datetime, sys
+import sqlite3, datetime, threading, queue, time, sys, logging
 import grid3.network
 from grid3 import tfchain
 
 WORKERS = 25
+RETRIES = 2
 
 if len(sys.argv) < 4:
     print('Three args are required: db file, start time, and end time.')
@@ -33,18 +34,25 @@ def lookup_node(address, chain):
 #def process_block(head, update_nr, subscription_id):
 #    block = main.sub.get_block(head['hash'])
 
-def process_block(chain, block, con, timestamp):
-    # Grab data for all nodes 
-    for extrinsic in block['extrinsics']:
-        data = extrinsic.value
-        if data['call']['call_function'] == 'report_uptime_v2':
-            uptime = data['call']['call_args'][0]['value']
-            node = lookup_node(data['address'], chain)
-            con.execute("INSERT INTO uptimes VALUES(?, ?, ?)", (node, uptime, timestamp))
-        elif data['call']['call_function'] == 'change_power_target':
-            target = data['call']['call_args'][1]['value']
-            node = data['call']['call_args'][0]['value']
-            con.execute("INSERT INTO power_target_changes VALUES(?, ?, ?)", (node, target, timestamp))
+def process_block(chain, block_number, con):
+    block = chain.sub.get_block(chain.sub.get_block_hash(block_number))
+    timestamp = chain.get_timestamp(block) / 1000
+
+    # Idea here is that we write data from the block and also note the fact that this block is processed in a single transaction that reverts if any error occurs (great idea?)
+    # TODO: Some threads throw a timeout error using the default timeout of 5 seconds, while most continue on. Seems maybe some transaction is still open from what we did before starting to process blocks
+    with con:
+        for extrinsic in block['extrinsics']:
+            data = extrinsic.value
+            if data['call']['call_function'] == 'report_uptime_v2':
+                uptime = data['call']['call_args'][0]['value']
+                node = lookup_node(data['address'], chain)
+                con.execute("INSERT INTO uptimes VALUES(?, ?, ?)", (node, uptime, timestamp))
+            elif data['call']['call_function'] == 'change_power_target':
+                target = data['call']['call_args'][1]['value']
+                node = data['call']['call_args'][0]['value']
+                con.execute("INSERT INTO power_target_changes VALUES(?, ?, ?)", (node, target, timestamp))
+
+        con.execute("INSERT INTO processed_blocks VALUES(?)", (block_number,))
 
 def processor(blocks):
     # Each processor thread has its own TF Chain and db connections
@@ -58,14 +66,14 @@ def processor(blocks):
 
         if block_number % 100 == 0:
             print('Processing block', block_number, 'at', datetime.datetime.now(), 'Blocks remaining:', blocks.qsize())
-        block = main.sub.get_block(main.sub.get_block_hash(block_number))
-        timestamp = main.get_timestamp(block) / 1000
 
-        # Idea here is that we write data from the block and also note the fact that this block is processed in a single transaction that reverts if any error occurs (great idea?)
-        # TODO: Some threads throw a timeout error using the default timeout of 5 seconds, while most continue on. Seems maybe some transaction is still open from what we did before starting to process blocks
-        with con:
-            process_block(main, block, con, timestamp)
-            con.execute("INSERT INTO processed_blocks VALUES(?)", (block_number,))
+        try:
+            process_block(main, block_number, con)
+        except:
+            logging.exception('Error while processing block')
+            # Just toss it back on the stack for another thread to retry. Whatever is going wrong with out substrate client is not recoverable by a plain retry. It's okay, we'll have plenty of threads left so this one can just die
+            # TODO: This can make an infinite loop tho. Better do something else
+            blocks.put(block_number)
 
 def parallelize(start, end):
     con = sqlite3.connect(DBFILE)
@@ -80,11 +88,14 @@ def parallelize(start, end):
     print('Starting', WORKERS, 'workers to process', blocks.qsize(), 'blocks')
     for i in range(WORKERS):
         threading.Thread(target=processor, args=[blocks]).start()
+        # Try staggering their starts a bit to see if this helps with db lock
+        time.sleep(1)
 
     blocks.join()
 
 def prep_db():
     con = sqlite3.connect(DBFILE)
+    #TODO: all tables should have a UNIQUE contraint to avoid duplicates
     con.execute("CREATE TABLE IF NOT EXISTS uptimes(node, uptime, timestamp)")
     con.execute("CREATE TABLE IF NOT EXISTS power_target_changes(node, target, timestamp)")
     con.execute("CREATE TABLE IF NOT EXISTS processed_blocks(block_number)")
