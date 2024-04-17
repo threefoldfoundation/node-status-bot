@@ -1,9 +1,21 @@
+"""
+This program is a standalone complement to the node status bot that gathers data from TF Chain to be used by the bot in determining if nodes have incurred minting violations due to use of the farmerbot. The result is an SQLite database that contains all uptime events, power state changes, and power target changes for all nodes during the scanned period. By default, all blocks for the current minting period are fetched and processed, along with all new blocks as they are created.
+
+So far not much of an attempt is made to catch all errors or ensure that the program continues running. Best to launch it from a process manager and ensure it's restarted on exit. All data is written in a transactional way, such that the results of processing any block, along with the fact that the block has been processed will all be written or all not be written on a given attempt.
+
+Some apparently unavoidable errors arise from use of the Python Substrate Interface module. It seems to not handing concurrency well and sometimes gives a "decoding failed error". That in itself is not a big problem, as it tends to only affect one thread and the thread will just exit and respawn. However I've also observed a rare and odd failure state where these errors become chronic along with database locked errors from SQLite. I had already eliminated a database locking issue and I don't see now how it can happen. Weird bug.
+
+TODO: Somehow address bug as just described. One way would be to look for a lot of thread failures and just bail at that point. Since the issue seems to occur only during specific starts of the program and does not tend to reoccur.
+"""
+
 import sqlite3, datetime, threading, queue, time, logging, functools, argparse
+from websocket._exceptions import WebSocketConnectionClosedException
 import grid3.network
 from grid3 import tfchain, minting
 
-WORKERS = 25
-RETRIES = 2
+MAX_WORKERS = 25
+MIN_WORKERS = 2
+SLEEP_TIME = 30
 
 parser = argparse.ArgumentParser()
 parser.add_argument('-f', '--file', help='Specify the database file name.', 
@@ -15,13 +27,32 @@ parser.add_argument('-e', '--end',
 
 args = parser.parse_args()
 
-def lookup_node(address, chain, con, block_hash):
+class SetQueue(queue.Queue):
+    def _init(self, maxsize):
+        self.queue = set()
+    def _put(self, item):
+        self.queue.add(item)
+    def _get(self):
+        return self.queue.pop()
+
+def add_missing_blocks(start_block, current_block, block_queue):
+    total_blocks = {i for i in range(start_block, current_block)}
+    processed_blocks = get_processed_blocks(con)
+    missing_blocks = total_blocks - processed_blocks
+    for i in missing_blocks:
+        block_queue.put(i)
+
+def get_processed_blocks(con):
+    results = con.execute("SELECT * from processed_blocks").fetchall()
+    return {r[0] for r in results}
+
+def lookup_node(address, client, con, block_hash):
     result = con.execute('SELECT * FROM nodes WHERE address=?', [address]).fetchone()
     if result:
         return result[0]
     else:
-        twin = chain.get_twin_by_account(address, block_hash)
-        node = chain.get_node_by_twin(twin, block_hash)
+        twin = client.get_twin_by_account(address, block_hash)
+        node = client.get_node_by_twin(twin, block_hash)
         try:
             con.execute("INSERT INTO nodes VALUES(?, ?, ?)", (node, twin, address))
             con.commit()
@@ -30,65 +61,66 @@ def lookup_node(address, chain, con, block_hash):
             print('Existing node:', con.execute('SELECT * FROM nodes WHERE node_id=?', [node]).fetchone())
         return node
 
-def process_block(chain, block_number, con):
-    block = chain.sub.get_block(chain.sub.get_block_hash(block_number))
-    timestamp = chain.get_timestamp(block) / 1000
+def process_block(client, block_number, con):
+    block = client.sub.get_block(client.sub.get_block_hash(block_number))
+    timestamp = client.get_timestamp(block) / 1000
 
     # Idea here is that we write data from the block and also note the fact that this block is processed in a single transaction that reverts if any error occurs (great idea?)
-    # TODO: Some threads throw a timeout error using the default timeout of 5 seconds, while most continue on. Seems maybe some transaction is still open from what we did before starting to process blocks
-    # Maybe (probably) this is caused because we are looking up node info on TF Chain and the client takes some time to get ready. That's why timeout only happen in the beginning. What we can do is prepare all data and then do the db operations in a separate dedicated step. Also, increasing the timeout to 15 seconds seemed to work fine
-    with con:
-        for extrinsic in block['extrinsics']:
-            data = extrinsic.value
-            if data['call']['call_function'] == 'report_uptime_v2':
-                uptime = data['call']['call_args'][0]['value']
-                node = lookup_node(data['address'], chain, con, block['header']['hash'])
-                con.execute("INSERT INTO uptimes VALUES(?, ?, ?)", (node, uptime, timestamp))
-            elif data['call']['call_function'] == 'change_power_target':
-                target = data['call']['call_args'][1]['value']
-                node = data['call']['call_args'][0]['value']
-                con.execute("INSERT INTO power_target_changes VALUES(?, ?, ?)", (node, target, timestamp))
+    updates = []
+    for extrinsic in block['extrinsics']:
+        data = extrinsic.value
+        if data['call']['call_function'] == 'report_uptime_v2':
+            uptime = data['call']['call_args'][0]['value']
+            node = lookup_node(data['address'], client, con, block['header']['hash'])
+            updates.append(("INSERT INTO uptimes VALUES(?, ?, ?)", (node, uptime, timestamp)))
+        elif data['call']['call_function'] == 'change_power_target':
+            node = data['call']['call_args'][0]['value']
+            target = data['call']['call_args'][1]['value']
+            updates.append(("INSERT INTO power_target_changes VALUES(?, ?, ?)", (node, target, timestamp)))
+        elif data['call']['call_function'] == 'change_power_state':
+            state = data['call']['call_args'][0]['value']
+            node = lookup_node(data['address'], client, con, block['header']['hash'])
+            updates.append(("INSERT INTO power_state_changes VALUES(?, ?, ?)", (node, state, timestamp)))
 
+    with con:
+        for update in updates:
+            con.execute(*update)
         con.execute("INSERT INTO processed_blocks VALUES(?)", (block_number,))
 
 def processor(block_queue):
     # Each processor thread has its own TF Chain and db connections
-    con = sqlite3.connect(args.file, timeout=15)
-    main = tfchain.TFChain()
+    con = sqlite3.connect(args.file)#, timeout=15)
+    client = tfchain.TFChain()
     while 1:
         block_number = block_queue.get()
-        if block_number is None:
+        if block_number < 0:
             return
 
-        process_block(main, block_number, con)
-        block_queue.task_done()
+        exists = con.execute("SELECT 1 FROM processed_blocks WHERE block_number=?", [block_number]).fetchone()
 
-        # Seems like a nice idea as part of some retry scheme, but generates huge log spam about AttributeError: 'NoneType' object has no attribute 'portable_registry'
-        # try:
-        #     process_block(main, block_number, con)
-        # except:
-        #     logging.exception('Error while processing block')
+        if exists is None:
+            process_block(client, block_number, con)
+            block_queue.task_done()
 
 def parallelize(start_block, end_block, block_queue):
     con = sqlite3.connect(args.file)
-    results = con.execute("SELECT * from processed_blocks").fetchall()
-    con.close()
     
-    processed_blocks = {r[0] for r in results}
+    processed_blocks = get_processed_blocks(con)
     remaining_blocks = set(range(start_block, end_block + 1)) - processed_blocks
 
     for b in remaining_blocks:
         block_queue.put(b)
 
-    print('Starting', WORKERS, 'workers to process', block_queue.qsize(), 'blocks')
+    print('Starting', MAX_WORKERS, 'workers to process', block_queue.qsize(), 'blocks')
 
-    threads = [spawn_worker(block_queue) for i in range(WORKERS)]
+    threads = [spawn_worker(block_queue) for i in range(MAX_WORKERS)]
     return threads
 
 def prep_db(con):
     #TODO: all tables should have a UNIQUE contraint to avoid duplicates
     con.execute("CREATE TABLE IF NOT EXISTS uptimes(node, uptime, timestamp, UNIQUE(node, uptime, timestamp)) ")
     con.execute("CREATE TABLE IF NOT EXISTS power_target_changes(node, target, timestamp, UNIQUE(node, target, timestamp))")
+    con.execute("CREATE TABLE IF NOT EXISTS power_state_changes(node, state, timestamp, UNIQUE(node, state, timestamp))")
     con.execute("CREATE TABLE IF NOT EXISTS processed_blocks(block_number PRIMARY KEY)")
     con.execute("CREATE TABLE IF NOT EXISTS nodes(node_id PRIMARY KEY, twin_id, address)")
     con.commit()
@@ -107,6 +139,28 @@ def populate_nodes(con):
 
         con.commit()
 
+def scale_workers(threads, block_queue):
+    if block_queue.qsize() < 2 and len(threads) > MIN_WORKERS:
+        print('Queue cleared, scaling down workers')
+        for i in range(len(threads) - MIN_WORKERS):
+            block_queue.put(-1 - i)
+
+    if block_queue.qsize() < MAX_WORKERS and len(threads) < MIN_WORKERS:
+        print('Queue is small, but fewer than', MIN_WORKERS, 'workers are alive. Spawning more workers')
+        for i in range(MIN_WORKERS - len(threads)):
+            threads.append(spawn_thread(block_queue))
+
+    if block_queue.qsize() > MAX_WORKERS and len(threads) < MAX_WORKERS:
+        print('More than', MAX_WORKERS, 'jobs remaining but fewer threads. Spawning more workers')
+        for i in range(MAX_WORKERS - len(threads)):
+            threads.append(spawn_worker(block_queue))
+
+def spawn_subsriber(block_queue, client):
+    callback = functools.partial(subscription_callback, block_queue)
+    sub_thread = threading.Thread(target=client.sub.subscribe_block_headers, args=[callback])
+    sub_thread.start()
+    return sub_thread
+
 def spawn_worker(block_queue):
     thread = threading.Thread(target=processor, args=[block_queue])
     thread.start()
@@ -122,20 +176,18 @@ populate_nodes(con)
 results = con.execute("SELECT * from processed_blocks").fetchall()
 processed_blocks = {r[0] for r in results}
 
-main = tfchain.TFChain()
-block_queue = queue.Queue()
-start_block = main.find_block(args.start)['header']['number']
+client = tfchain.TFChain()
+block_queue = SetQueue()
+start_block = client.find_block(args.start)['header']['number']
 
 if args.end:
-    end_block = main.find_block(args.end)['header']['number']
+    end_block = client.find_block(args.end)['header']['number']
     parallelize(start_block, end_block, block_queue)
     # Wait for all jobs to finish. Since our threads aren't daemons, the program will exit after this
     block_queue.join()
 else:
     # Since using the subscribe method blocks, we give it a thread
-    callback = functools.partial(subscription_callback, block_queue)
-    sub_thread = threading.Thread(target=main.sub.subscribe_block_headers, args=[callback])
-    sub_thread.start()
+    sub_thread = spawn_subsriber(block_queue, client)
 
     # We wait to get the first block number back from the subscribe callback, so that we're sure which block is the end of the historic range we want
     block = block_queue.get()
@@ -143,23 +195,25 @@ else:
     threads = parallelize(start_block, block - 1, block_queue)
 
     while 1:
-        time.sleep(10)
-        alive_threads = len([t for t in threads if t.is_alive()])
-        print(datetime.datetime.now(), block_queue.qsize(), 'blocks remaining', alive_threads, 'threads alive')
+        time.sleep(SLEEP_TIME)
 
-        if block_queue.qsize() < WORKERS and alive_threads > 2:
-            print('Less than',  WORKERS, 'jobs remaining, scaling down workers')
-            for i in range(alive_threads - 2):
-                block_queue.put(None)
+        # We can periodically get disconnected from the websocket, especially if running on a machine that goes into standby. On each loop we try once to reconnect if needed before trying to use the client below
+        if not client.sub.websocket.connected:
+            client.sub.connect_websocket()
 
-        if block_queue.qsize() < WORKERS and alive_threads < 2:
-            print('Less than', WORKERS, 'jobs remaining, but fewer than 2 workers. Spawning more workers')
-            for i in range(2 - alive_threads):
-                threads.append(spawn_thread(block_queue))
+        try:
+            current_block = client.sub.get_block_header()['header']['number']
+            add_missing_blocks(start_block, current_block, block_queue)
+        except WebSocketConnectionClosedException:
+            print("Web socket closed in main loop")
 
-        if block_queue.qsize() > 5 and alive_threads < WORKERS:
-            print('More than', WORKERS, 'jobs remaining but fewer threads. Spawning more workers')
-            for i in range(WORKERS - alive_threads):
-                threads.append(spawn_thread(block_queue))
+        # We just discard any threads that have died for any reason. They will be replaced by the auto scaling. In fact, we don't try to handle errors at all in the worker threads--the blocks just get retried later
+        threads = [t for t in threads if t.is_alive()]
+        print(datetime.datetime.now(), block_queue.qsize(), 'blocks remaining', len(threads), 'threads alive')
 
-        #TODO: Periodically check for missed blocks and retry them. Also, error handling inside the processor in general
+        scale_workers(threads, block_queue)
+
+        # Also make sure we keep alive our subscription thread. If there's an error in the callback, it propagates up and the thread dies
+        if not sub_thread.is_alive():
+            print("Subscription thread died, respawning it")
+            sub_thread = spawn_subsriber(block_queue, client)
