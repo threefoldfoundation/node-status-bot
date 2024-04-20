@@ -44,15 +44,19 @@ def add_missing_blocks(start_number, current_number, block_queue):
     for i in missing_blocks:
         block_queue.put(i)
 
-def fetch_powers(timestamp, block_hash):
+def fetch_powers(block_number):
     # To emulating minting properly, we need to know the power state and target of each node at the beginning of the minting period
     # Get our own clients so this can run in a thread
     con = sqlite3.connect(args.file, timeout=15)
-    client = tfchain.TFChain()   
+    client = tfchain.TFChain()
+
+    block = client.sub.get_block(block_number=block_number)
+    block_hash = block['header']['hash']
+    timestamp = client.get_timestamp(block)
 
     max_node = client.get_node_id(block_hash)
     nodes = set(range(1, max_node + 1))
-    existing_powers = con.execute("SELECT node FROM powers WHERE timestamp=?", (timestamp,)).fetchall()
+    existing_powers = con.execute("SELECT node_id FROM PowerState WHERE block=?", (block_number,)).fetchall()
     nodes -= {p[0] for p in existing_powers}
 
     print('Fetching node powers for', len(nodes), 'nodes')
@@ -63,58 +67,42 @@ def fetch_powers(timestamp, block_hash):
         # I seem to remember there being some None values in here at some point, but it seems now that all nodes get a default of Up, Up
         if power['state'] == 'Up':
             state = 'Up'
-            block = None
+            down_block = None
         else:
             state = 'Down'
-            block = power['state']['Down']
-        con.execute("INSERT INTO powers VALUES(?, ?, ?, ?, ?)", (node, state, block, power['target'], timestamp))
+            down_block = power['state']['Down']
+        con.execute("INSERT INTO PowerState VALUES(?, ?, ?, ?, ?, ?)", (node, state, down_block, power['target'], block_number, timestamp))
         con.commit()
 
 def get_processed_blocks(con):
     results = con.execute("SELECT * FROM processed_blocks").fetchall()
     return {r[0] for r in results}
 
-def lookup_node(address, client, con, block_hash):
-    result = con.execute('SELECT * FROM nodes WHERE address=?', [address]).fetchone()
-    if result:
-        return result[0]
-    else:
-        twin = client.get_twin_by_account(address, block_hash)
-        node = client.get_node_by_twin(twin, block_hash)
-        # Any account can call the change power state extrinsic, and some users mistakenly do this from their regular accounts apparently. In case there's no node associated with a twin, the chain returns 0
-        if node != 0:
-            try:
-                con.execute("INSERT INTO nodes VALUES(?, ?, ?)", (node, twin, address))
-                con.commit()
-            except sqlite3.IntegrityError:
-                print('Tried to insert duplicate node:', node, twin, address, block_hash)
-                print('Existing node:', con.execute('SELECT * FROM nodes WHERE node_id=?', [node]).fetchone())
-        else:
-            print('No node found on node lookup:', node, twin, address, block_hash)
-        return node
-
 def process_block(client, block_number, con):
-    block = client.sub.get_block(client.sub.get_block_hash(block_number))
+    block_hash = client.sub.get_block_hash(block_number)
+    block = client.sub.get_block(block_hash)
+    events = client.sub.get_events(block_hash)
     timestamp = client.get_timestamp(block) / 1000
 
     # Idea here is that we write data from the block and also note the fact that this block is processed in a single transaction that reverts if any error occurs (great idea?)
     updates = []
-    for extrinsic in block['extrinsics']:
-        data = extrinsic.value
-        if data['call']['call_function'] == 'report_uptime_v2':
-            uptime = data['call']['call_args'][0]['value']
-            node = lookup_node(data['address'], client, con, block['header']['hash'])
-            if node != 0:
-                updates.append(("INSERT INTO uptimes VALUES(?, ?, ?)", (node, uptime, timestamp)))
-        elif data['call']['call_function'] == 'change_power_target':
-            node = data['call']['call_args'][0]['value']
-            target = data['call']['call_args'][1]['value']
-            updates.append(("INSERT INTO power_target_changes VALUES(?, ?, ?)", (node, target, timestamp)))
-        elif data['call']['call_function'] == 'change_power_state':
-            state = data['call']['call_args'][0]['value']
-            node = lookup_node(data['address'], client, con, block['header']['hash'])
-            if node != 0:
-                updates.append(("INSERT INTO power_state_changes VALUES(?, ?, ?)", (node, state, timestamp)))
+    for event in events:
+        event = event.value
+        event_id  = event['event_id']
+        attributes = event['attributes']
+        if event_id == 'NodeUptimeReported':
+            updates.append(("INSERT INTO NodeUptimeReported VALUES(?, ?, ?, ?, ?)", (attributes[0], attributes[1], attributes[2], block_number, timestamp)))
+        elif event_id == 'PowerTargetChanged':
+            updates.append(("INSERT INTO PowerTargetChanged VALUES(?, ?, ?, ?, ?)", (attributes['farm_id'], attributes['node_id'], attributes['power_target'], block_number, timestamp)))
+        elif event_id == 'PowerStateChanged':
+            if attributes['power_state'] == 'Up':
+                state = 'Up'
+                down_block = None
+            else:
+                state = 'Down'
+                down_block = attributes['power_state']['Down']
+
+            updates.append(("INSERT INTO PowerStateChanged VALUES(?, ?, ?, ?, ?, ?)", (attributes['farm_id'], attributes['node_id'], state, down_block, block_number, timestamp)))
 
     try:
         with con:
@@ -156,27 +144,17 @@ def parallelize(con, start_number, end_number, block_queue):
     return threads
 
 def prep_db(con):
-    con.execute("CREATE TABLE IF NOT EXISTS uptimes(node, uptime, timestamp, UNIQUE(node, uptime, timestamp)) ")
-    con.execute("CREATE TABLE IF NOT EXISTS power_target_changes(node, target, timestamp, UNIQUE(node, target, timestamp))")
-    con.execute("CREATE TABLE IF NOT EXISTS power_state_changes(node, state, timestamp, UNIQUE(node, state, timestamp))")
-    con.execute("CREATE TABLE IF NOT EXISTS powers(node, state, block, target, timestamp, UNIQUE(node, timestamp))")
+    con.execute("CREATE TABLE IF NOT EXISTS NodeUptimeReported(node_id, uptime, timestamp_hint, block, timestamp, UNIQUE(node_id, uptime, block)) ")
+
+    con.execute("CREATE TABLE IF NOT EXISTS PowerTargetChanged(farm_id, node_id, target, block, timestamp, UNIQUE(node_id, target, block))")
+
+    con.execute("CREATE TABLE IF NOT EXISTS PowerStateChanged(farm_id, node_id, state, down_block, block, timestamp, UNIQUE(node_id, state, block))")
+
+    con.execute("CREATE TABLE IF NOT EXISTS PowerState(node_id, state, down_block, target, block, timestamp, UNIQUE(node_id, timestamp))")
+
     con.execute("CREATE TABLE IF NOT EXISTS processed_blocks(block_number PRIMARY KEY)")
-    con.execute("CREATE TABLE IF NOT EXISTS nodes(node_id PRIMARY KEY, twin_id, address)")
+
     con.commit()
-
-def populate_nodes(con):
-    # Cache all known nodes from GraphQL if the nodes table is empty
-    if con.execute('SELECT COUNT(*) FROM nodes').fetchone()[0] == 0:
-        graphql = grid3.network.GridNetwork().graphql
-        nodes = graphql.nodes(['nodeID', 'twinID'])
-        twins = graphql.twins(['twinID', 'accountID'])
-        twin_to_account = {t['twinID']: t['accountID'] for t in twins}
-
-        for node in nodes:
-            twin = node['twinID']
-            con.execute("INSERT INTO nodes VALUES(?, ?, ?)", (node['nodeID'], twin, twin_to_account[twin]))
-
-        con.commit()
 
 def scale_workers(threads, block_queue):
     if block_queue.qsize() < 2 and len(threads) > MIN_WORKERS:
@@ -208,10 +186,9 @@ def spawn_worker(block_queue):
 def subscription_callback(block_queue, head, update_nr, subscription_id):
     block_queue.put(head['header']['number'])
 
-# Prep database, populate nodes, and grab already processed blocks
+# Prep database and grab already processed blocks
 con = sqlite3.connect(args.file, timeout=15)
 prep_db(con)
-populate_nodes(con)
 
 results = con.execute("SELECT * FROM processed_blocks").fetchall()
 processed_blocks = {r[0] for r in results}
@@ -223,14 +200,14 @@ else:
     start = args.start
     
 client = tfchain.TFChain()
-start_number = client.find_block(start)
+start_number = client.find_block_minting(start)
 block = client.sub.get_block(block_number=start_number)
-Thread(target=fetch_powers, args=[start, block['header']['hash']]).start()
+Thread(target=fetch_powers, args=[start_number]).start()
 block_queue = SetQueue()
 
 if args.end:
     end = int(args.end) + POST_PERIOD
-    end_number = client.find_block(end)
+    end_number = client.find_block_minting(end)
     threads = parallelize(con, start_number, end_number, block_queue)
 
     while block_queue.qsize() > 10:
