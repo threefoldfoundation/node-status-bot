@@ -19,6 +19,9 @@ MIN_WORKERS = 2
 SLEEP_TIME = 30
 POST_PERIOD = 60 * 60
 
+# When querying a fixed period of blocks, how many times to retry missed blocks
+RETRIES = 3
+
 parser = argparse.ArgumentParser()
 parser.add_argument('-f', '--file', help='Specify the database file name.', 
                     type=str, default='tfchain_data.db')
@@ -37,12 +40,13 @@ class SetQueue(queue.Queue):
     def _get(self):
         return self.queue.pop()
 
-def add_missing_blocks(start_number, current_number, block_queue):
-    total_blocks = {i for i in range(start_number, current_number)}
+def load_queue(start_number, end_number, block_queue):
+    total_blocks = set(range(start_number, end_number + 1))
     processed_blocks = get_processed_blocks(con)
     missing_blocks = total_blocks - processed_blocks
     for i in missing_blocks:
         block_queue.put(i)
+    return len(missing_blocks)
 
 def fetch_powers(block_number):
     # To emulating minting properly, we need to know the power state and target of each node at the beginning of the minting period
@@ -82,18 +86,20 @@ def process_block(client, block_number, con):
     block_hash = client.sub.get_block_hash(block_number)
     block = client.sub.get_block(block_hash)
     events = client.sub.get_events(block_hash)
-    timestamp = client.get_timestamp(block) / 1000
+    timestamp = client.get_timestamp(block) // 1000
 
     # Idea here is that we write data from the block and also note the fact that this block is processed in a single transaction that reverts if any error occurs (great idea?)
-    updates = []
+    # We use a set because sometimes an extrinsic can get duplicated in a single block (mortal/immortal). See an example in block 11,655,947
+    # This doesn't matter from the perspective of minting, but will cause the db to throw a UNIQUE violation error
+    updates = set()
     for event in events:
         event = event.value
         event_id  = event['event_id']
         attributes = event['attributes']
         if event_id == 'NodeUptimeReported':
-            updates.append(("INSERT INTO NodeUptimeReported VALUES(?, ?, ?, ?, ?)", (attributes[0], attributes[1], attributes[2], block_number, timestamp)))
+            updates.add(("INSERT INTO NodeUptimeReported VALUES(?, ?, ?, ?, ?)", (attributes[0], attributes[1], attributes[2], block_number, timestamp)))
         elif event_id == 'PowerTargetChanged':
-            updates.append(("INSERT INTO PowerTargetChanged VALUES(?, ?, ?, ?, ?)", (attributes['farm_id'], attributes['node_id'], attributes['power_target'], block_number, timestamp)))
+            updates.add(("INSERT INTO PowerTargetChanged VALUES(?, ?, ?, ?, ?)", (attributes['farm_id'], attributes['node_id'], attributes['power_target'], block_number, timestamp)))
         elif event_id == 'PowerStateChanged':
             if attributes['power_state'] == 'Up':
                 state = 'Up'
@@ -101,20 +107,19 @@ def process_block(client, block_number, con):
             else:
                 state = 'Down'
                 down_block = attributes['power_state']['Down']
+            updates.add(("INSERT INTO PowerStateChanged VALUES(?, ?, ?, ?, ?, ?)", (attributes['farm_id'], attributes['node_id'], state, down_block, block_number, timestamp)))
 
-            updates.append(("INSERT INTO PowerStateChanged VALUES(?, ?, ?, ?, ?, ?)", (attributes['farm_id'], attributes['node_id'], state, down_block, block_number, timestamp)))
-
-    try:
-        with con:
-            for update in updates:
-                con.execute(*update)
-            con.execute("INSERT INTO processed_blocks VALUES(?)", (block_number,))
-    except sqlite3.IntegrityError as e:
-        # Although we make various attempts to ensure that blocks are only processed once, these are not guarantees and occasionally we will attempt to violate a UNIQUE constraint. In this case, the transaction is reverted by the context manager above and we ignore the error here
-        if "UNIQUE" in e.args[0]:
-            pass
-        else:
-            raise
+        try:
+            with con:
+                for update in updates:
+                    con.execute(*update)
+                    con.execute("INSERT INTO processed_blocks VALUES(?)", (block_number,))
+        except sqlite3.IntegrityError as e:
+            # Although we make various attempts to ensure that blocks are only processed once, these are not guarantees and occasionally we will attempt to violate a UNIQUE constraint. In this case, the transaction is reverted by the context manager above and we ignore the error here
+            if "UNIQUE" in e.args[0]:
+                pass
+            else:
+                raise
 
 def processor(block_queue):
     # Each processor thread has its own TF Chain and db connections
@@ -127,16 +132,15 @@ def processor(block_queue):
 
         exists = con.execute("SELECT 1 FROM processed_blocks WHERE block_number=?", [block_number]).fetchone()
 
-        if exists is None:
-            process_block(client, block_number, con)
+        try:
+            if exists is None:
+                process_block(client, block_number, con)
+        finally:
+            # This allows us to join() the queue later to determine when all queued blocks have been attempted, even if processing failed
             block_queue.task_done()
 
 def parallelize(con, start_number, end_number, block_queue):
-    processed_blocks = get_processed_blocks(con)
-    remaining_blocks = set(range(start_number, end_number + 1)) - processed_blocks
-
-    for b in remaining_blocks:
-        block_queue.put(b)
+    load_queue(start_number, end_number, block_queue)
 
     print('Starting', MAX_WORKERS, 'workers to process', block_queue.qsize(), 'blocks')
 
@@ -208,16 +212,26 @@ block_queue = SetQueue()
 if args.end:
     end = int(args.end) + POST_PERIOD
     end_number = client.find_block_minting(end)
+
+
     threads = parallelize(con, start_number, end_number, block_queue)
 
-    while block_queue.qsize() > 10:
+    while block_queue.qsize() > 0:
         time.sleep(SLEEP_TIME)
         threads = [t for t in threads if t.is_alive()]
         print(datetime.datetime.now(), block_queue.qsize(), 'blocks remaining', len(threads), 'threads alive')
         scale_workers(threads, block_queue)
 
-    # Wait for remaining jobs to finish. Since our threads aren't daemons, the program will exit after this
+    # Retry any missed blocks three times. Since we don't handle errors in the threads, it's normal to miss a few
+    while missing_count := load_queue(start_number, end_number, block_queue):
+        print(datetime.datetime.now(), missing_count, 'blocks to retry', len(threads), 'threads alive')
+        block_queue.join()
+
+    # Finally wait for any remaining jobs to complete
     block_queue.join()
+    # Signal remaining threads to exit
+    [block_queue.put(-1) for t in threads if t.is_alive()]
+
 else:
     # Since using the subscribe method blocks, we give it a thread
     sub_thread = spawn_subsriber(block_queue, client)
@@ -236,7 +250,7 @@ else:
 
         try:
             current_number = client.sub.get_block_header()['header']['number']
-            add_missing_blocks(start_number, current_number, block_queue)
+            load_queue(start_number, current_number, block_queue)
         except WebSocketConnectionClosedException:
             print("Web socket closed in main loop")
 
