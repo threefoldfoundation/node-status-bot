@@ -1,14 +1,18 @@
 """
-This program is a standalone complement to the node status bot that gathers data from TF Chain to be used by the bot in determining if nodes have incurred minting violations due to use of the farmerbot. The result is an SQLite database that contains all uptime events, power state changes, and power target changes for all nodes during the scanned period. By default, all blocks for the current minting period are fetched and processed, along with all new blocks as they are created.
+This program is a standalone complement to the node status bot that gathers data from TF Chain to be used by the bot in determining if nodes have incurred minting violations due to use of the farmerbot. The result is a SQLite database that contains all uptime events, power state changes, and power target changes for all nodes during the scanned period. By default, all blocks for the current minting period are fetched and processed, along with all new blocks as they are created.
 
 So far not much of an attempt is made to catch all errors or ensure that the program continues running. Best to launch it from a process manager and ensure it's restarted on exit. All data is written in a transactional way, such that the results of processing any block, along with the fact that the block has been processed will all be written or all not be written on a given attempt.
 
 Some apparently unavoidable errors arise from use of the Python Substrate Interface module. It seems to not handing concurrency well and sometimes gives a "decoding failed error". That in itself is not a big problem, as it tends to only affect one thread and the thread will just exit and respawn. However I've also observed a rare and odd failure state where these errors become chronic along with database locked errors from SQLite. I had already eliminated a database locking issue and I don't see now how it can happen. Weird bug.
 
-TODO: Somehow address bug as just described. One way would be to look for a lot of thread failures and just bail at that point. Since the issue seems to occur only during specific starts of the program and does not tend to reoccur. For now am trying to just reintroduce the timeout of 15 seconds.
+TODO: Somehow address bug as just described. One way would be to look for a lot of thread failures and just bail at that point. Since the issue seems to occur only during specific starts of the program and does not tend to reoccur.
+
+Still getting db locked errors sometimes. There's now a dedicated writer process, but the fetch_powers also writes to the db on its own when it's running. Even when just the writer process is running, it's still possible to timeout with locked db, for reasons I don't understand. For now I increased the db timeout to 30 seconds and that helps.
+
+TODO: Catch errors in writer proccess or otherwise ensure it gets resurrected.
 """
 
-import sqlite3, datetime, threading, queue, time, logging, functools, argparse
+import sqlite3, datetime, multiprocessing, queue, time, logging, functools, argparse
 from threading import Thread
 from websocket._exceptions import WebSocketConnectionClosedException
 import grid3.network
@@ -17,6 +21,8 @@ from grid3 import tfchain, minting
 MAX_WORKERS = 25
 MIN_WORKERS = 2
 SLEEP_TIME = 30
+DB_TIMEOUT = 30
+WRITE_BATCH = 100
 POST_PERIOD = 60 * 60
 
 # When querying a fixed period of blocks, how many times to retry missed blocks
@@ -27,8 +33,12 @@ parser.add_argument('-f', '--file', help='Specify the database file name.',
                     type=str, default='tfchain_data.db')
 parser.add_argument('-s', '--start', 
                     help='Give a timestamp to start scanning blocks. If ommitted, scanning starts from beginning of current minting period', type=int)
+parser.add_argument('--start-block', 
+                    help='Give a block number to start scanning blocks', type=int)
 parser.add_argument('-e', '--end', 
-                    help='By default, scanning continues to process new blocks as they are generated. When an end timestamp is given, scanning stops at that block height and the program exits', type=str)
+                    help='By default, scanning continues to process new blocks as they are generated. When an end timestamp is given, scanning stops at that block height and the program exits', type=int)
+parser.add_argument('--end-block', 
+                    help='Specify end by block number rather than timestamp', type=int)
 
 args = parser.parse_args()
 
@@ -48,15 +58,50 @@ def load_queue(start_number, end_number, block_queue):
         block_queue.put(i)
     return len(missing_blocks)
 
-def fetch_powers(block_number):
+def db_writer(write_queue):
+    con = sqlite3.connect(args.file, timeout=DB_TIMEOUT)
+    processed_blocks = get_processed_blocks(con)
+
+    while 1:
+        jobs = []
+        while 1:
+            # Implemented the batching feature before making this job a process, so maybe it's not actually needed to keep up with 25 block fetchers running in threads. Probably it would also be more efficient to use execute_many for each type when batching
+            if len(jobs) >= WRITE_BATCH:
+                break
+            try:
+                job = write_queue.get(timeout=1)
+                if job is None:
+                    return
+                else:
+                    jobs.append(job)
+            except queue.Empty:
+                if jobs:
+                    break
+        
+        batch_blocks = set()
+        with con:
+            for job in jobs:
+                block_number = job[0]
+                if block_number not in processed_blocks:
+                    updates = job[1]
+                    for update in updates:
+                        con.execute(*update)
+                    con.execute("INSERT INTO processed_blocks VALUES(?)", (block_number,))
+                    batch_blocks.add(block_number)
+                write_queue.task_done()
+        # Maybe doesn't do any good, because if a transaction fails that should generate an error and then the proc exits, but in case we want to catch errors above, this is a better approach to not diverge from db
+        processed_blocks.update(batch_blocks)
+
+
+def fetch_powers(block_number, writer_queue):
     # To emulating minting properly, we need to know the power state and target of each node at the beginning of the minting period
     # Get our own clients so this can run in a thread
-    con = sqlite3.connect(args.file, timeout=15)
+    con = sqlite3.connect(args.file, timeout=DB_TIMEOUT)
     client = tfchain.TFChain()
 
     block = client.sub.get_block(block_number=block_number)
     block_hash = block['header']['hash']
-    timestamp = client.get_timestamp(block)
+    timestamp = client.get_timestamp(block) // 1000
 
     max_node = client.get_node_id(block_hash)
     nodes = set(range(1, max_node + 1))
@@ -82,7 +127,7 @@ def get_processed_blocks(con):
     results = con.execute("SELECT * FROM processed_blocks").fetchall()
     return {r[0] for r in results}
 
-def process_block(client, block_number, con):
+def process_block(client, block_number, write_queue):
     block_hash = client.sub.get_block_hash(block_number)
     block = client.sub.get_block(block_hash)
     events = client.sub.get_events(block_hash)
@@ -91,15 +136,17 @@ def process_block(client, block_number, con):
     # Idea here is that we write data from the block and also note the fact that this block is processed in a single transaction that reverts if any error occurs (great idea?)
     # We use a set because sometimes an extrinsic can get duplicated in a single block (mortal/immortal). See an example in block 11,655,947
     # This doesn't matter from the perspective of minting, but will cause the db to throw a UNIQUE violation error
+
     updates = set()
-    for event in events:
+    for i, event in enumerate(events):
         event = event.value
         event_id  = event['event_id']
         attributes = event['attributes']
+        # TODO: pass these more efficiently than writing the INSERT string for each one
         if event_id == 'NodeUptimeReported':
-            updates.add(("INSERT INTO NodeUptimeReported VALUES(?, ?, ?, ?, ?)", (attributes[0], attributes[1], attributes[2], block_number, timestamp)))
+            updates.add(("INSERT INTO NodeUptimeReported VALUES(?, ?, ?, ?, ?, ?)", (attributes[0], attributes[2], attributes[1], block_number, i, timestamp)))
         elif event_id == 'PowerTargetChanged':
-            updates.add(("INSERT INTO PowerTargetChanged VALUES(?, ?, ?, ?, ?)", (attributes['farm_id'], attributes['node_id'], attributes['power_target'], block_number, timestamp)))
+            updates.add(("INSERT INTO PowerTargetChanged VALUES(?, ?, ?, ?, ?, ?)", (attributes['farm_id'], attributes['node_id'], attributes['power_target'], block_number, i, timestamp)))
         elif event_id == 'PowerStateChanged':
             if attributes['power_state'] == 'Up':
                 state = 'Up'
@@ -107,23 +154,13 @@ def process_block(client, block_number, con):
             else:
                 state = 'Down'
                 down_block = attributes['power_state']['Down']
-            updates.add(("INSERT INTO PowerStateChanged VALUES(?, ?, ?, ?, ?, ?)", (attributes['farm_id'], attributes['node_id'], state, down_block, block_number, timestamp)))
+            updates.add(("INSERT INTO PowerStateChanged VALUES(?, ?, ?, ?, ?, ?, ?)", (attributes['farm_id'], attributes['node_id'], state, down_block, block_number, i, timestamp)))
 
-        try:
-            with con:
-                for update in updates:
-                    con.execute(*update)
-                    con.execute("INSERT INTO processed_blocks VALUES(?)", (block_number,))
-        except sqlite3.IntegrityError as e:
-            # Although we make various attempts to ensure that blocks are only processed once, these are not guarantees and occasionally we will attempt to violate a UNIQUE constraint. In this case, the transaction is reverted by the context manager above and we ignore the error here
-            if "UNIQUE" in e.args[0]:
-                pass
-            else:
-                raise
+    write_queue.put((block_number, updates))
 
-def processor(block_queue):
+def processor(block_queue, write_queue):
     # Each processor thread has its own TF Chain and db connections
-    con = sqlite3.connect(args.file, timeout=15)
+    con = sqlite3.connect(args.file, timeout=DB_TIMEOUT)
     client = tfchain.TFChain()
     while 1:
         block_number = block_queue.get()
@@ -134,25 +171,26 @@ def processor(block_queue):
 
         try:
             if exists is None:
-                process_block(client, block_number, con)
+                process_block(client, block_number, write_queue)
         finally:
             # This allows us to join() the queue later to determine when all queued blocks have been attempted, even if processing failed
             block_queue.task_done()
 
-def parallelize(con, start_number, end_number, block_queue):
+def parallelize(con, start_number, end_number, block_queue, write_queue):
     load_queue(start_number, end_number, block_queue)
 
-    print('Starting', MAX_WORKERS, 'workers to process', block_queue.qsize(), 'blocks')
+    print('Starting', MAX_WORKERS, 'workers to process', block_queue.qsize(), 'blocks, with starting block number', start_number, 'and ending block number', end_number)
 
-    threads = [spawn_worker(block_queue) for i in range(MAX_WORKERS)]
+    threads = [spawn_worker(block_queue, write_queue) for i in range(MAX_WORKERS)]
     return threads
 
 def prep_db(con):
-    con.execute("CREATE TABLE IF NOT EXISTS NodeUptimeReported(node_id, uptime, timestamp_hint, block, timestamp, UNIQUE(node_id, uptime, block)) ")
+    # While block number and timestamp of the block are 1-1, converting between them later is not trivial, so it can be helpful to have both. We also store the event index, because the ordering of events within a block can be important from the perspective of minting (in rare cases). For uptime_hint, this is as far as I know always equal to the block time stamp // 1000
+    con.execute("CREATE TABLE IF NOT EXISTS NodeUptimeReported(node_id, uptime, timestamp_hint, block, event_index, timestamp, UNIQUE(node_id, uptime, block))")
 
-    con.execute("CREATE TABLE IF NOT EXISTS PowerTargetChanged(farm_id, node_id, target, block, timestamp, UNIQUE(node_id, target, block))")
+    con.execute("CREATE TABLE IF NOT EXISTS PowerTargetChanged(farm_id, node_id, target, block, event_index, timestamp, UNIQUE(node_id, target, block))")
 
-    con.execute("CREATE TABLE IF NOT EXISTS PowerStateChanged(farm_id, node_id, state, down_block, block, timestamp, UNIQUE(node_id, state, block))")
+    con.execute("CREATE TABLE IF NOT EXISTS PowerStateChanged(farm_id, node_id, state, down_block, block, event_index, timestamp, UNIQUE(node_id, state, block))")
 
     con.execute("CREATE TABLE IF NOT EXISTS PowerState(node_id, state, down_block, target, block, timestamp, UNIQUE(node_id, timestamp))")
 
@@ -160,7 +198,7 @@ def prep_db(con):
 
     con.commit()
 
-def scale_workers(threads, block_queue):
+def scale_workers(threads, block_queue, write_queue):
     if block_queue.qsize() < 2 and len(threads) > MIN_WORKERS:
         print('Queue cleared, scaling down workers')
         for i in range(len(threads) - MIN_WORKERS):
@@ -174,7 +212,7 @@ def scale_workers(threads, block_queue):
     if block_queue.qsize() > MAX_WORKERS and len(threads) < MAX_WORKERS:
         print('More than', MAX_WORKERS, 'jobs remaining but fewer threads. Spawning more workers')
         for i in range(MAX_WORKERS - len(threads)):
-            threads.append(spawn_worker(block_queue))
+            threads.append(spawn_worker(block_queue, write_queue))
 
 def spawn_subsriber(block_queue, client):
     callback = functools.partial(subscription_callback, block_queue)
@@ -182,8 +220,8 @@ def spawn_subsriber(block_queue, client):
     sub_thread.start()
     return sub_thread
 
-def spawn_worker(block_queue):
-    thread = Thread(target=processor, args=[block_queue])
+def spawn_worker(block_queue, write_queue):
+    thread = Thread(target=processor, args=[block_queue, write_queue])
     thread.start()
     return thread
 
@@ -191,46 +229,59 @@ def subscription_callback(block_queue, head, update_nr, subscription_id):
     block_queue.put(head['header']['number'])
 
 # Prep database and grab already processed blocks
-con = sqlite3.connect(args.file, timeout=15)
+con = sqlite3.connect(args.file, timeout=DB_TIMEOUT)
 prep_db(con)
 
 results = con.execute("SELECT * FROM processed_blocks").fetchall()
 processed_blocks = {r[0] for r in results}
 
-# If no start time given, use beginning of current minting period
-if args.start is None:
-    start = minting.Period().start
-else:
-    start = args.start
-    
+# Start tfchain client
 client = tfchain.TFChain()
-start_number = client.find_block_minting(start)
-block = client.sub.get_block(block_number=start_number)
-Thread(target=fetch_powers, args=[start_number]).start()
+
+# If no start time given, use beginning of current minting period
+if args.start and args.start_block is None:
+    start_number = client.find_block_minting(minting.Period().start)
+elif args.start_block:
+    start_number = args.start_block
+else:  
+    start_number = client.find_block_minting(start)
+
 block_queue = SetQueue()
+write_queue = multiprocessing.JoinableQueue()
 
-if args.end:
-    end = int(args.end) + POST_PERIOD
-    end_number = client.find_block_minting(end)
+writer_proc = multiprocessing.Process(target=db_writer, args=[write_queue])
+writer_proc.start()
 
+powers_thread = Thread(target=fetch_powers, args=[start_number, write_queue])
+powers_thread.start()
 
-    threads = parallelize(con, start_number, end_number, block_queue)
+if args.end or args.end_block:
+    if args.end_block:
+        end_number = args.end_block
+    else:
+        end_number = client.find_block_minting(args.end + POST_PERIOD)
+
+    threads = parallelize(con, start_number, end_number, block_queue, write_queue)
 
     while block_queue.qsize() > 0:
         time.sleep(SLEEP_TIME)
         threads = [t for t in threads if t.is_alive()]
-        print(datetime.datetime.now(), block_queue.qsize(), 'blocks remaining', len(threads), 'threads alive')
-        scale_workers(threads, block_queue)
+        print(datetime.datetime.now(), block_queue.qsize(), 'blocks remaining', len(threads), 'threads alive', write_queue.qsize(), 'write jobs')
+        scale_workers(threads, block_queue, write_queue)
 
+    write_queue.join()
     # Retry any missed blocks three times. Since we don't handle errors in the threads, it's normal to miss a few
     while missing_count := load_queue(start_number, end_number, block_queue):
         print(datetime.datetime.now(), missing_count, 'blocks to retry', len(threads), 'threads alive')
         block_queue.join()
+        write_queue.join()
 
     # Finally wait for any remaining jobs to complete
     block_queue.join()
+    write_queue.join()
     # Signal remaining threads to exit
     [block_queue.put(-1) for t in threads if t.is_alive()]
+    write_queue.put(None)
 
 else:
     # Since using the subscribe method blocks, we give it a thread
@@ -239,7 +290,7 @@ else:
     # We wait to get the first block number back from the subscribe callback, so that we're sure which block is the end of the historic range we want
     block = block_queue.get()
     block_queue.put(block)
-    threads = parallelize(con, start_number, block - 1, block_queue)
+    threads = parallelize(con, start_number, block - 1, block_queue, write_queue)
 
     while 1:
         time.sleep(SLEEP_TIME)
@@ -256,9 +307,9 @@ else:
 
         # We just discard any threads that have died for any reason. They will be replaced by the auto scaling. In fact, we don't try to handle errors at all in the worker threads--the blocks just get retried later
         threads = [t for t in threads if t.is_alive()]
-        print(datetime.datetime.now(), block_queue.qsize(), 'blocks remaining', len(threads), 'threads alive')
+        print(datetime.datetime.now(), block_queue.qsize(), 'blocks remaining', len(threads), 'threads alive', write_queue.qsize(), 'write jobs')
 
-        scale_workers(threads, block_queue)
+        scale_workers(threads, block_queue, write_queue)
 
         # Also make sure we keep alive our subscription thread. If there's an error in the callback, it propagates up and the thread dies
         if not sub_thread.is_alive():
