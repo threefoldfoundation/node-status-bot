@@ -78,20 +78,23 @@ def db_writer(write_queue):
                 if jobs:
                     break
         
-        batch_blocks = set()
-        with con:
-            for job in jobs:
-                block_number = job[0]
-                if block_number not in processed_blocks:
-                    updates = job[1]
-                    for update in updates:
-                        con.execute(*update)
-                    con.execute("INSERT INTO processed_blocks VALUES(?)", (block_number,))
-                    batch_blocks.add(block_number)
+        try: 
+            batch_blocks = set()
+            with con:
+                for job in jobs:
+                    block_number = job[0]
+                    if block_number not in processed_blocks:
+                        updates = job[1]
+                        for update in updates:
+                            con.execute(*update)
+                        con.execute("INSERT INTO processed_blocks VALUES(?)", (block_number,))
+                        batch_blocks.add(block_number)
+        except Exception as e:
+            print("Got an exception in write loop:", e)
+            print("While processing job:", job)
+        finally:
+            for _ in range(len(jobs)):
                 write_queue.task_done()
-        # Maybe doesn't do any good, because if a transaction fails that should generate an error and then the proc exits, but in case we want to catch errors above, this is a better approach to not diverge from db
-        processed_blocks.update(batch_blocks)
-
 
 def fetch_powers(block_number, writer_queue):
     # To emulating minting properly, we need to know the power state and target of each node at the beginning of the minting period
@@ -186,13 +189,14 @@ def parallelize(con, start_number, end_number, block_queue, write_queue):
 
 def prep_db(con):
     # While block number and timestamp of the block are 1-1, converting between them later is not trivial, so it can be helpful to have both. We also store the event index, because the ordering of events within a block can be important from the perspective of minting (in rare cases). For uptime_hint, this is as far as I know always equal to the block time stamp // 1000
-    con.execute("CREATE TABLE IF NOT EXISTS NodeUptimeReported(node_id, uptime, timestamp_hint, block, event_index, timestamp, UNIQUE(node_id, uptime, block))")
+    # Each event should be uniquely identified by its block and event numbers
+    con.execute("CREATE TABLE IF NOT EXISTS NodeUptimeReported(node_id, uptime, timestamp_hint, block, event_index, timestamp, UNIQUE(event_index, block))")
 
-    con.execute("CREATE TABLE IF NOT EXISTS PowerTargetChanged(farm_id, node_id, target, block, event_index, timestamp, UNIQUE(node_id, target, block))")
+    con.execute("CREATE TABLE IF NOT EXISTS PowerTargetChanged(farm_id, node_id, target, block, event_index, timestamp, UNIQUE(event_index, block))")
 
-    con.execute("CREATE TABLE IF NOT EXISTS PowerStateChanged(farm_id, node_id, state, down_block, block, event_index, timestamp, UNIQUE(node_id, state, block))")
+    con.execute("CREATE TABLE IF NOT EXISTS PowerStateChanged(farm_id, node_id, state, down_block, block, event_index, timestamp, UNIQUE(event_index, block))")
 
-    con.execute("CREATE TABLE IF NOT EXISTS PowerState(node_id, state, down_block, target, block, timestamp, UNIQUE(node_id, timestamp))")
+    con.execute("CREATE TABLE IF NOT EXISTS PowerState(node_id, state, down_block, target, block, timestamp, UNIQUE(node_id, block))")
 
     con.execute("CREATE TABLE IF NOT EXISTS processed_blocks(block_number PRIMARY KEY)")
 
