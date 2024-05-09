@@ -8,8 +8,6 @@ Some apparently unavoidable errors arise from use of the Python Substrate Interf
 TODO: Somehow address bug as just described. One way would be to look for a lot of thread failures and just bail at that point. Since the issue seems to occur only during specific starts of the program and does not tend to reoccur.
 
 Still getting db locked errors sometimes. There's now a dedicated writer process, but the fetch_powers also writes to the db on its own when it's running. Even when just the writer process is running, it's still possible to timeout with locked db, for reasons I don't understand. For now I increased the db timeout to 30 seconds and that helps.
-
-TODO: Catch errors in writer proccess or otherwise ensure it gets resurrected.
 """
 
 import sqlite3, datetime, multiprocessing, queue, time, logging, functools, argparse
@@ -80,6 +78,7 @@ def db_writer(write_queue):
         
         try: 
             batch_blocks = set()
+            # The entire batch, including the noting of the fact that we've processed certain blocks happens as a transaction. If something goes wrong, the whole batch is reverted and must be retried
             with con:
                 for job in jobs:
                     block_number = job[0]
@@ -130,13 +129,12 @@ def get_processed_blocks(con):
     results = con.execute("SELECT * FROM processed_blocks").fetchall()
     return {r[0] for r in results}
 
-def process_block(client, block_number, write_queue):
+def process_block(client, block_number):
     block_hash = client.sub.get_block_hash(block_number)
     block = client.sub.get_block(block_hash)
     events = client.sub.get_events(block_hash)
     timestamp = client.get_timestamp(block) // 1000
 
-    # Idea here is that we write data from the block and also note the fact that this block is processed in a single transaction that reverts if any error occurs (great idea?)
     # We use a set because sometimes an extrinsic can get duplicated in a single block (mortal/immortal). See an example in block 11,655,947
     # This doesn't matter from the perspective of minting, but will cause the db to throw a UNIQUE violation error
 
@@ -159,7 +157,7 @@ def process_block(client, block_number, write_queue):
                 down_block = attributes['power_state']['Down']
             updates.add(("INSERT INTO PowerStateChanged VALUES(?, ?, ?, ?, ?, ?, ?)", (attributes['farm_id'], attributes['node_id'], state, down_block, block_number, i, timestamp)))
 
-    write_queue.put((block_number, updates))
+    return updates
 
 def processor(block_queue, write_queue):
     # Each processor thread has its own TF Chain and db connections
@@ -174,7 +172,9 @@ def processor(block_queue, write_queue):
 
         try:
             if exists is None:
-                process_block(client, block_number, write_queue)
+                if updates := process_block(client, block_number):
+                    write_queue.put((block_number, updates))
+
         finally:
             # This allows us to join() the queue later to determine when all queued blocks have been attempted, even if processing failed
             block_queue.task_done()
@@ -232,6 +232,8 @@ def spawn_worker(block_queue, write_queue):
 def subscription_callback(block_queue, head, update_nr, subscription_id):
     block_queue.put(head['header']['number'])
 
+print('Staring up, preparing to ingest some blocks, nom nom')
+
 # Prep database and grab already processed blocks
 con = sqlite3.connect(args.file, timeout=DB_TIMEOUT)
 prep_db(con)
@@ -242,13 +244,13 @@ processed_blocks = {r[0] for r in results}
 # Start tfchain client
 client = tfchain.TFChain()
 
-# If no start time given, use beginning of current minting period
-if args.start and args.start_block is None:
-    start_number = client.find_block_minting(minting.Period().start)
-elif args.start_block:
+if args.start_block:
     start_number = args.start_block
-else:  
-    start_number = client.find_block_minting(start)
+elif args.start:  
+    start_number = client.find_block_minting(args.start)
+else:
+    # By default, use beginning of current minting period
+    start_number = client.find_block_minting(minting.Period().start)
 
 block_queue = SetQueue()
 write_queue = multiprocessing.JoinableQueue()
@@ -273,6 +275,7 @@ if args.end or args.end_block:
         print(datetime.datetime.now(), block_queue.qsize(), 'blocks remaining', len(threads), 'threads alive', write_queue.qsize(), 'write jobs')
         scale_workers(threads, block_queue, write_queue)
 
+    block_queue.join()
     write_queue.join()
     # Retry any missed blocks three times. Since we don't handle errors in the threads, it's normal to miss a few
     while missing_count := load_queue(start_number, end_number, block_queue):
