@@ -10,8 +10,9 @@ TODO: Somehow address bug as just described. One way would be to look for a lot 
 Still getting db locked errors sometimes. There's now a dedicated writer process, but the fetch_powers also writes to the db on its own when it's running. Even when just the writer process is running, it's still possible to timeout with locked db, for reasons I don't understand. For now I increased the db timeout to 30 seconds and that helps.
 """
 
-import sqlite3, datetime, multiprocessing, queue, time, logging, functools, argparse
+import sqlite3, datetime, time, logging, functools, argparse
 from threading import Thread
+from multiprocessing import Process, JoinableQueue
 from websocket._exceptions import WebSocketConnectionClosedException
 import grid3.network
 from grid3 import tfchain, minting
@@ -40,14 +41,6 @@ parser.add_argument('--end-block',
 
 args = parser.parse_args()
 
-class SetQueue(queue.Queue):
-    def _init(self, maxsize):
-        self.queue = set()
-    def _put(self, item):
-        self.queue.add(item)
-    def _get(self):
-        return self.queue.pop()
-
 def load_queue(start_number, end_number, block_queue):
     total_blocks = set(range(start_number, end_number + 1))
     processed_blocks = get_processed_blocks(con)
@@ -61,40 +54,24 @@ def db_writer(write_queue):
     processed_blocks = get_processed_blocks(con)
 
     while 1:
-        jobs = []
-        while 1:
-            # Implemented the batching feature before making this job a process, so maybe it's not actually needed to keep up with 25 block fetchers running in threads. Probably it would also be more efficient to use execute_many for each type when batching
-            if len(jobs) >= WRITE_BATCH:
-                break
-            try:
-                job = write_queue.get(timeout=1)
-                if job is None:
-                    write_queue.task_done()
-                    return
-                else:
-                    jobs.append(job)
-            except queue.Empty:
-                if jobs:
-                    break
-        
+        job = write_queue.get()
+        if job is None:
+            return
+
         try: 
-            batch_blocks = set()
-            # The entire batch, including the noting of the fact that we've processed certain blocks happens as a transaction. If something goes wrong, the whole batch is reverted and must be retried
             with con:
-                for job in jobs:
-                    block_number = job[0]
-                    if block_number not in processed_blocks:
-                        updates = job[1]
-                        for update in updates:
-                            con.execute(*update)
-                        con.execute("INSERT INTO processed_blocks VALUES(?)", (block_number,))
-                        batch_blocks.add(block_number)
+                block_number = job[0]
+                if block_number not in processed_blocks:
+                    updates = job[1]
+                    for update in updates:
+                        con.execute(*update)
+                    con.execute("INSERT INTO processed_blocks VALUES(?)", (block_number,))
+                    processed_blocks.add(block_number)
         except Exception as e:
             print("Got an exception in write loop:", e)
             print("While processing job:", job)
         finally:
-            for _ in range(len(jobs)):
-                write_queue.task_done()
+            write_queue.task_done()
 
 def fetch_powers(block_number, writer_queue):
     # To emulating minting properly, we need to know the power state and target of each node at the beginning of the minting period
@@ -139,10 +116,7 @@ def process_block(block, events):
     block_number = block['header']['number']
     timestamp = block['extrinsics'][0].value['call']['call_args'][0]['value'] // 1000
 
-    # We used a set because sometimes an extrinsic can get duplicated in a single block (mortal/immortal). See an example in block 11,655,947
-    # This shouldn't matter anymore since we now track event index too so all events are unique
-
-    updates = set()
+    updates = []
     for i, event in enumerate(events):
         event = event.value
         event_id  = event['event_id']
@@ -164,7 +138,7 @@ def process_block(block, events):
     return updates
 
 def processor(block_queue, write_queue):
-    # Each processor thread has its own TF Chain and db connections
+    # Each processor has its own TF Chain and db connections
     con = sqlite3.connect(args.file, timeout=DB_TIMEOUT)
     client = tfchain.TFChain()
     while 1:
@@ -190,8 +164,8 @@ def parallelize(con, start_number, end_number, block_queue, write_queue):
 
     print('Starting', MAX_WORKERS, 'workers to process', block_queue.qsize(), 'blocks, with starting block number', start_number, 'and ending block number', end_number)
 
-    threads = [spawn_worker(block_queue, write_queue) for i in range(MAX_WORKERS)]
-    return threads
+    processes = [spawn_worker(block_queue, write_queue) for i in range(MAX_WORKERS)]
+    return processes
 
 def prep_db(con):
     # While block number and timestamp of the block are 1-1, converting between them later is not trivial, so it can be helpful to have both. We also store the event index, because the ordering of events within a block can be important from the perspective of minting (in rare cases). For uptime_hint, this is as far as I know always equal to the block time stamp // 1000
@@ -208,21 +182,21 @@ def prep_db(con):
 
     con.commit()
 
-def scale_workers(threads, block_queue, write_queue):
-    if block_queue.qsize() < 2 and len(threads) > MIN_WORKERS:
+def scale_workers(processes, block_queue, write_queue):
+    if block_queue.qsize() < 2 and len(processes) > MIN_WORKERS:
         print('Queue cleared, scaling down workers')
-        for i in range(len(threads) - MIN_WORKERS):
+        for i in range(len(processes) - MIN_WORKERS):
             block_queue.put(-1 - i)
 
-    if block_queue.qsize() < MAX_WORKERS and len(threads) < MIN_WORKERS:
+    if block_queue.qsize() < MAX_WORKERS and len(processes) < MIN_WORKERS:
         print('Queue is small, but fewer than', MIN_WORKERS, 'workers are alive. Spawning more workers')
-        for i in range(MIN_WORKERS - len(threads)):
-            threads.append(spawn_thread(block_queue))
+        for i in range(MIN_WORKERS - len(processes)):
+            processes.append(spawn_worker(block_queue))
 
-    if block_queue.qsize() > MAX_WORKERS and len(threads) < MAX_WORKERS:
-        print('More than', MAX_WORKERS, 'jobs remaining but fewer threads. Spawning more workers')
-        for i in range(MAX_WORKERS - len(threads)):
-            threads.append(spawn_worker(block_queue, write_queue))
+    if block_queue.qsize() > MAX_WORKERS and len(processes) < MAX_WORKERS:
+        print('More than', MAX_WORKERS, 'jobs remaining but fewer processes. Spawning more workers')
+        for i in range(MAX_WORKERS - len(processes)):
+            processes.append(spawn_worker(block_queue, write_queue))
 
 def spawn_subsriber(block_queue, client):
     callback = functools.partial(subscription_callback, block_queue)
@@ -231,9 +205,9 @@ def spawn_subsriber(block_queue, client):
     return sub_thread
 
 def spawn_worker(block_queue, write_queue):
-    thread = multiprocessing.Process(target=processor, args=[block_queue, write_queue])
-    thread.start()
-    return thread
+    process = Process(target=processor, args=[block_queue, write_queue])
+    process.start()
+    return process
 
 def subscription_callback(block_queue, head, update_nr, subscription_id):
     block_queue.put(head['header']['number'])
@@ -258,10 +232,10 @@ else:
     # By default, use beginning of current minting period
     start_number = client.find_block_minting(minting.Period().start)
 
-block_queue = multiprocessing.JoinableQueue()
-write_queue = multiprocessing.JoinableQueue()
+block_queue = JoinableQueue()
+write_queue = JoinableQueue()
 
-writer_proc = multiprocessing.Process(target=db_writer, args=[write_queue])
+writer_proc = Process(target=db_writer, args=[write_queue])
 writer_proc.start()
 
 powers_thread = Thread(target=fetch_powers, args=[start_number, write_queue])
@@ -273,29 +247,29 @@ if args.end or args.end_block:
     else:
         end_number = client.find_block_minting(args.end + POST_PERIOD)
 
-    threads = parallelize(con, start_number, end_number, block_queue, write_queue)
+    processes = parallelize(con, start_number, end_number, block_queue, write_queue)
 
     while (block_qsize := block_queue.qsize()) > 0:
         time.sleep(SLEEP_TIME)
-        threads = [t for t in threads if t.is_alive()]
-        print(datetime.datetime.now(), 'processed', block_qsize - block_queue.qsize(), 'blocks in', SLEEP_TIME, 'seconds', block_queue.qsize(), 'blocks remaining', len(threads), 'threads alive', write_queue.qsize(), 'write jobs')
-        scale_workers(threads, block_queue, write_queue)
+        processes = [t for t in processes if t.is_alive()]
+        print(datetime.datetime.now(), 'processed', block_qsize - block_queue.qsize(), 'blocks in', SLEEP_TIME, 'seconds', block_queue.qsize(), 'blocks remaining', len(processes), 'processes alive', write_queue.qsize(), 'write jobs')
+        scale_workers(processes, block_queue, write_queue)
 
     print('Joining blocks queue')
     block_queue.join()
     print('Joining write queue')
     write_queue.join()
-    # Retry any missed blocks three times. Since we don't handle errors in the threads, it's normal to miss a few
+    # Retry any missed blocks three times. Since we don't handle errors in the when fetching and processing blocks, it's normal to miss a few
     while missing_count := load_queue(start_number, end_number, block_queue):
-        print(datetime.datetime.now(), missing_count, 'blocks to retry', len(threads), 'threads alive')
+        print(datetime.datetime.now(), missing_count, 'blocks to retry', len(processes), 'processes alive')
         block_queue.join()
         write_queue.join()
 
     # Finally wait for any remaining jobs to complete
     block_queue.join()
     write_queue.join()
-    # Signal remaining threads to exit
-    [block_queue.put(-1) for t in threads if t.is_alive()]
+    # Signal remaining processes to exit
+    [block_queue.put(-1) for t in processes if t.is_alive()]
     write_queue.put(None)
 
 else:
@@ -305,7 +279,7 @@ else:
     # We wait to get the first block number back from the subscribe callback, so that we're sure which block is the end of the historic range we want
     block = block_queue.get()
     block_queue.put(block)
-    threads = parallelize(con, start_number, block - 1, block_queue, write_queue)
+    processes = parallelize(con, start_number, block - 1, block_queue, write_queue)
 
     while 1:
         time.sleep(SLEEP_TIME)
@@ -320,11 +294,11 @@ else:
         except WebSocketConnectionClosedException:
             print("Web socket closed in main loop")
 
-        # We just discard any threads that have died for any reason. They will be replaced by the auto scaling. In fact, we don't try to handle errors at all in the worker threads--the blocks just get retried later
-        threads = [t for t in threads if t.is_alive()]
-        print(datetime.datetime.now(), block_queue.qsize(), 'blocks remaining', len(threads), 'threads alive', write_queue.qsize(), 'write jobs')
+        # We just discard any processes that have died for any reason. They will be replaced by the auto scaling. In fact, we don't try to handle errors at all in the worker processes--the blocks just get retried later
+        processes = [t for t in processes if t.is_alive()]
+        print(datetime.datetime.now(), block_queue.qsize(), 'blocks remaining', len(processes), 'processes alive', write_queue.qsize(), 'write jobs')
 
-        scale_workers(threads, block_queue, write_queue)
+        scale_workers(processes, block_queue, write_queue)
 
         # Also make sure we keep alive our subscription thread. If there's an error in the callback, it propagates up and the thread dies
         if not sub_thread.is_alive():
