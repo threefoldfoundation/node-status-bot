@@ -41,6 +41,7 @@ parser.add_argument('--end-block',
 
 args = parser.parse_args()
 
+
 def load_queue(start_number, end_number, block_queue):
     total_blocks = set(range(start_number, end_number + 1))
     processed_blocks = get_processed_blocks(con)
@@ -123,9 +124,9 @@ def process_block(block, events):
         attributes = event['attributes']
         # TODO: pass these more efficiently than writing the INSERT string for each one
         if event_id == 'NodeUptimeReported':
-            updates.add(("INSERT INTO NodeUptimeReported VALUES(?, ?, ?, ?, ?, ?)", (attributes[0], attributes[2], attributes[1], block_number, i, timestamp)))
+            updates.append(("INSERT INTO NodeUptimeReported VALUES(?, ?, ?, ?, ?, ?)", (attributes[0], attributes[2], attributes[1], block_number, i, timestamp)))
         elif event_id == 'PowerTargetChanged':
-            updates.add(("INSERT INTO PowerTargetChanged VALUES(?, ?, ?, ?, ?, ?)", (attributes['farm_id'], attributes['node_id'], attributes['power_target'], block_number, i, timestamp)))
+            updates.append(("INSERT INTO PowerTargetChanged VALUES(?, ?, ?, ?, ?, ?)", (attributes['farm_id'], attributes['node_id'], attributes['power_target'], block_number, i, timestamp)))
         elif event_id == 'PowerStateChanged':
             if attributes['power_state'] == 'Up':
                 state = 'Up'
@@ -133,7 +134,7 @@ def process_block(block, events):
             else:
                 state = 'Down'
                 down_block = attributes['power_state']['Down']
-            updates.add(("INSERT INTO PowerStateChanged VALUES(?, ?, ?, ?, ?, ?, ?)", (attributes['farm_id'], attributes['node_id'], state, down_block, block_number, i, timestamp)))
+            updates.append(("INSERT INTO PowerStateChanged VALUES(?, ?, ?, ?, ?, ?, ?)", (attributes['farm_id'], attributes['node_id'], state, down_block, block_number, i, timestamp)))
 
     return updates
 
