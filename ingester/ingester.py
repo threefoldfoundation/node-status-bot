@@ -16,7 +16,7 @@ from websocket._exceptions import WebSocketConnectionClosedException
 import grid3.network
 from grid3 import tfchain, minting
 
-MAX_WORKERS = 25
+MAX_WORKERS = 50
 MIN_WORKERS = 2
 SLEEP_TIME = 30
 DB_TIMEOUT = 30
@@ -69,6 +69,7 @@ def db_writer(write_queue):
             try:
                 job = write_queue.get(timeout=1)
                 if job is None:
+                    write_queue.task_done()
                     return
                 else:
                     jobs.append(job)
@@ -125,18 +126,21 @@ def fetch_powers(block_number, writer_queue):
         con.execute("INSERT INTO PowerState VALUES(?, ?, ?, ?, ?, ?)", (node, state, down_block, power['target'], block_number, timestamp))
         con.commit()
 
+def get_block(client, block_number):
+    block = client.sub.get_block(block_number=block_number)
+    events = client.sub.get_events(block['header']['hash'])
+    return block, events
+
 def get_processed_blocks(con):
     results = con.execute("SELECT * FROM processed_blocks").fetchall()
     return {r[0] for r in results}
 
-def process_block(client, block_number):
-    block_hash = client.sub.get_block_hash(block_number)
-    block = client.sub.get_block(block_hash)
-    events = client.sub.get_events(block_hash)
-    timestamp = client.get_timestamp(block) // 1000
+def process_block(block, events):
+    block_number = block['header']['number']
+    timestamp = block['extrinsics'][0].value['call']['call_args'][0]['value'] // 1000
 
-    # We use a set because sometimes an extrinsic can get duplicated in a single block (mortal/immortal). See an example in block 11,655,947
-    # This doesn't matter from the perspective of minting, but will cause the db to throw a UNIQUE violation error
+    # We used a set because sometimes an extrinsic can get duplicated in a single block (mortal/immortal). See an example in block 11,655,947
+    # This shouldn't matter anymore since we now track event index too so all events are unique
 
     updates = set()
     for i, event in enumerate(events):
@@ -166,14 +170,16 @@ def processor(block_queue, write_queue):
     while 1:
         block_number = block_queue.get()
         if block_number < 0:
+            block_queue.task_done()
             return
 
         exists = con.execute("SELECT 1 FROM processed_blocks WHERE block_number=?", [block_number]).fetchone()
 
         try:
             if exists is None:
-                if updates := process_block(client, block_number):
-                    write_queue.put((block_number, updates))
+                block, events = get_block(client, block_number)
+                updates = process_block(block, events)
+                write_queue.put((block_number, updates))
 
         finally:
             # This allows us to join() the queue later to determine when all queued blocks have been attempted, even if processing failed
@@ -225,7 +231,7 @@ def spawn_subsriber(block_queue, client):
     return sub_thread
 
 def spawn_worker(block_queue, write_queue):
-    thread = Thread(target=processor, args=[block_queue, write_queue])
+    thread = multiprocessing.Process(target=processor, args=[block_queue, write_queue])
     thread.start()
     return thread
 
@@ -252,7 +258,7 @@ else:
     # By default, use beginning of current minting period
     start_number = client.find_block_minting(minting.Period().start)
 
-block_queue = SetQueue()
+block_queue = multiprocessing.JoinableQueue()
 write_queue = multiprocessing.JoinableQueue()
 
 writer_proc = multiprocessing.Process(target=db_writer, args=[write_queue])
@@ -269,13 +275,15 @@ if args.end or args.end_block:
 
     threads = parallelize(con, start_number, end_number, block_queue, write_queue)
 
-    while block_queue.qsize() > 0:
+    while (block_qsize := block_queue.qsize()) > 0:
         time.sleep(SLEEP_TIME)
         threads = [t for t in threads if t.is_alive()]
-        print(datetime.datetime.now(), block_queue.qsize(), 'blocks remaining', len(threads), 'threads alive', write_queue.qsize(), 'write jobs')
+        print(datetime.datetime.now(), 'processed', block_qsize - block_queue.qsize(), 'blocks in', SLEEP_TIME, 'seconds', block_queue.qsize(), 'blocks remaining', len(threads), 'threads alive', write_queue.qsize(), 'write jobs')
         scale_workers(threads, block_queue, write_queue)
 
+    print('Joining blocks queue')
     block_queue.join()
+    print('Joining write queue')
     write_queue.join()
     # Retry any missed blocks three times. Since we don't handle errors in the threads, it's normal to miss a few
     while missing_count := load_queue(start_number, end_number, block_queue):
