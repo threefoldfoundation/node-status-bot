@@ -1,4 +1,5 @@
-import logging, argparse, time
+import logging, argparse, time, sqlite3
+from datetime import datetime
 import requests
 
 import telegram
@@ -10,12 +11,16 @@ from gql.transport.requests import RequestsHTTPTransport
 from gql.transport.exceptions import TransportServerError
 
 import grid3.graphql
+import grid3.minting
 from grid3.types import Node
+
+import find_violations
 
 # from grid3.rmb import RmbClient, RmbPeer
 
 NETWORKS = ['main', 'test', 'dev']
 DEFAULT_PING_TIMEOUT = 10
+DB_FILE = 'tfchain.db'
 
 parser = argparse.ArgumentParser()
 parser.add_argument('token', help='Specify a bot token')
@@ -118,6 +123,10 @@ def check_job(context: CallbackContext):
                     for chat_id in subbed_nodes[node.nodeId]:
                         send_message(context, chat_id, text='Node {} has come online \N{electric light bulb}'.format(node.nodeId))
 
+                # We track which nodes have ever been managed by farmerbot, since those are the only ones that can get violations and scanning for violations is a fairly expensive operation
+                if status == 'standby':
+                    node.farmerbot = True
+
             except:
                 logging.exception("Error in alert block")
 
@@ -163,6 +172,15 @@ def format_verticle_list(items):
     for item in items:
         text += str(item) + '\n'
     return text
+
+def format_violations(violations):
+    strings = []
+    for violation in violations:
+        if violation[1] is None:
+            strings.append('Boot requested at {} but never booted'.format(datetime.fromtimestamp(violation[0])))
+        else:
+            strings.append('Boot requested at {} but node booted at {}'.format(datetime.fromtimestamp(violation[0]), datetime.fromtimestamp(violation[1])))
+    return format_verticle_list(strings)
 
 def get_nodes(net, node_ids):
     """
@@ -280,6 +298,27 @@ def ping_rmb(net, nodes, timeout):
     up_nodes = [node for node in nodes if node.twinId in twins_replied]
     return up_nodes
 
+def populate_violations(context: CallbackContext):
+    # Since we only want to notify users about _new_ violations, we need to establish a baseline at some point (when the feature is enabled or when a new bot is started for the first time)
+    if context.bot_data.setdefault('violations_populated', False):
+        return
+
+    # We only track violations for mainnet
+    nodes = context.bot_data['nodes']['main']
+
+    con = sqlite3.connect(DB_FILE)
+    current_period = grid3.minting.Period()
+    last_period = grid3.minting.Period(offset=current_period.offset - 1)
+    
+    for node in nodes:
+        violations = find_violations.check_node(con, node_id, last_period)
+        violations.extend(find_violations.check_node(con, node_id, current_period))
+        node.violations = violations
+        if violations or node.status == 'standby':
+            node.farmerbot = True
+
+    context.bot_data['violations_populated'] = True
+
 def send_message(context, chat_id, text):
     try:
         context.bot.send_message(chat_id=chat_id, text=text)
@@ -320,7 +359,6 @@ This bot is experimental and probably has bugs. Only you are responsible for you
 def status_gql(update: Update, context: CallbackContext):
     chat_id = update.effective_chat.id
     user = context.bot_data['chats'].setdefault(chat_id, new_user())
-
         
     net = user['net']
 
@@ -508,6 +546,23 @@ def unsubscribe(update: Update, context: CallbackContext):
         else:
             send_message(context, chat_id, text='Please write "/unsubscribe all" if you wish to remove all subscribed nodes.')
 
+def violations(update: Update, context: CallbackContext):
+    chat_id = update.effective_chat.id
+    node_id = int(context.args[0])
+
+    con = sqlite3.connect(DB_FILE)
+    exists = con.execute('SELECT 1 FROM NodeUptimeReported WHERE node_id=?', (node_id,)).fetchone()
+    if exists:
+        send_message(context, chat_id, text='Checking for violations...')
+        current_period = grid3.minting.Period()
+        last_period = grid3.minting.Period(offset=current_period.offset - 1)
+        violations = find_violations.check_node(con, node_id, last_period)
+        violations.extend(find_violations.check_node(con, node_id, current_period))
+        if violations:
+            send_message(context, chat_id, text='Violations found for this node:\n' + format_violations(violations))
+        else:
+            send_message(context, chat_id, text='No violations found for this node')
+
 def send_logs(update: Update, context: CallbackContext):
     if update.effective_chat.id != args.admin:
         return
@@ -549,6 +604,7 @@ dispatcher.add_handler(CommandHandler('sub', subscribe))
 dispatcher.add_handler(CommandHandler('timeout', timeout))
 dispatcher.add_handler(CommandHandler('unsubscribe', unsubscribe))
 dispatcher.add_handler(CommandHandler('unsub', unsubscribe))
+dispatcher.add_handler(CommandHandler('violations', violations))
 
 # Admin commands
 dispatcher.add_handler(CommandHandler('logs', send_logs))
@@ -564,7 +620,8 @@ if args.dump:
 
 updater.job_queue.run_once(initialize, when=0)
 updater.job_queue.run_once(migrate_data, when=0) #Can remove after use
-updater.job_queue.run_repeating(check_job, interval=args.poll, first=0)
+updater.job_queue.run_once(populate_violations, when=0)
+updater.job_queue.run_repeating(check_job, interval=args.poll, first=1)
 updater.job_queue.run_repeating(log_job, interval=3600, first=0)
 
 updater.start_polling()
