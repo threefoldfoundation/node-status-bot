@@ -20,7 +20,6 @@ import find_violations
 
 NETWORKS = ['main', 'test', 'dev']
 DEFAULT_PING_TIMEOUT = 10
-DB_FILE = 'tfchain.db'
 
 parser = argparse.ArgumentParser()
 parser.add_argument('token', help='Specify a bot token')
@@ -36,6 +35,8 @@ parser.add_argument('-a', '--admin', help='Set the admin chat id', type=int)
 parser.add_argument('-t', '--test', help='Enable test feature', 
                     action="store_true")
 parser.add_argument('-d', '--dump', help='Dump bot data', action="store_true")
+parser.add_argument('-f', '--db_file', 
+                    help='Specify file for sqlite db', type=str, default='tfchain.db')
 args = parser.parse_args()
 
 pickler = PicklePersistence(filename='bot_data')
@@ -86,6 +87,11 @@ def check_job(context: CallbackContext):
     """
     The main attraction. This function collects all the node ids that have an active subscription, checks their status, then sends alerts to users whose nodes have a status change.
     """
+    con = sqlite3.connect(args.db_file)
+    current_period = grid3.minting.Period()
+    last_period = grid3.minting.Period(offset=current_period.offset - 1)
+    periods = (current_period, last_period)
+
     for net in NETWORKS:
         # First gather all actively subscribed nodes and note who is subscribed
         try:
@@ -94,44 +100,56 @@ def check_job(context: CallbackContext):
             for chat_id, data in context.bot_data['chats'].items():
                 for node_id in data['nodes'][net]:
                     subbed_nodes.setdefault(node_id, []).append(chat_id)
-            nodes = get_nodes(net, subbed_nodes)
+            updates = get_nodes(net, subbed_nodes)
         except:
             logging.exception("Error fetching node data for check")
             continue
 
-        for node in nodes:
+        for update in updates:
             try:
-                previous = context.bot_data['nodes'][net][node.nodeId]
+                node = context.bot_data['nodes'][net][update.nodeId]
 
-                if previous.power['target'] == 'Down' and node.power['target'] == 'Up':
+                if node.power['target'] == 'Down' and update.power['target'] == 'Up':
                     for chat_id in subbed_nodes[node.nodeId]:
                         send_message(context, chat_id, text='Node {} wake up initiated \N{hot beverage}'.format(node.nodeId))
 
-                if previous.status == 'up' and node.status == 'down':
+                if node.status == 'up' and update.status == 'down':
                     for chat_id in subbed_nodes[node.nodeId]:
                         send_message(context, chat_id, text='Node {} has gone offline \N{warning sign}'.format(node.nodeId))
 
-                elif previous.status == 'up' and node.status == 'standby':
+                elif node.status == 'up' and update.status == 'standby':
                     for chat_id in subbed_nodes[node.nodeId]:
                         send_message(context, chat_id, text='Node {} has gone to sleep \N{last quarter moon with face}'.format(node.nodeId))
 
-                elif previous.status == 'standby' and node.status == 'down':
+                elif node.status == 'standby' and update.status == 'down':
                     for chat_id in subbed_nodes[node.nodeId]:
                         send_message(context, chat_id, text='Node {} did not wake up within 24 hours \N{warning sign}'.format(node.nodeId))
 
-                elif previous.status in ('down', 'standby') and node.status == 'up':
+                elif node.status in ('down', 'standby') and update.status == 'up':
                     for chat_id in subbed_nodes[node.nodeId]:
                         send_message(context, chat_id, text='Node {} has come online \N{electric light bulb}'.format(node.nodeId))
 
                 # We track which nodes have ever been managed by farmerbot, since those are the only ones that can get violations and scanning for violations is a fairly expensive operation
-                if status == 'standby':
+                if node.status == 'standby' or update.status == 'standby':
                     node.farmerbot = True
+
+                if node.farmerbot:
+                    violations = get_violations(con, node.nodeId, periods)
+                    for v in violations:
+                        if v[0] not in node.violations:
+                            for chat_id in subbed_nodes[node.nodeId]:
+                                send_message(context, chat_id, text='Farmerbot violation detected for node {}. {} 🚨'.format(node.nodeId, format_violation(v)))
+                        
+                        # We do this every time because information about when a node finally booted might become available later
+                        node.violations[v[0]] = v
 
             except:
                 logging.exception("Error in alert block")
 
             finally:
-                context.bot_data['nodes'][net][node.nodeId] = node
+                node.status = update.status
+                node.updatedAt = update.updatedAt
+                node.power = update.power
 
 def format_list(items):
     if len(items) == 1:
@@ -173,14 +191,21 @@ def format_verticle_list(items):
         text += str(item) + '\n'
     return text
 
+def format_violation(violation):
+    if violation[1] is None:
+        return 'Boot requested at {} but node has not booted'.format(datetime.fromtimestamp(violation[0]))
+    else:
+        return 'Boot requested at {} but node booted at {}'.format(datetime.fromtimestamp(violation[0]), datetime.fromtimestamp(violation[1]))
+
 def format_violations(violations):
-    strings = []
-    for violation in violations:
-        if violation[1] is None:
-            strings.append('Boot requested at {} but never booted'.format(datetime.fromtimestamp(violation[0])))
-        else:
-            strings.append('Boot requested at {} but node booted at {}'.format(datetime.fromtimestamp(violation[0]), datetime.fromtimestamp(violation[1])))
-    return format_verticle_list(strings)
+    return format_verticle_list([format_violation(v) for v in violations])
+
+def get_con_and_periods():
+    con = sqlite3.connect(args.db_file)
+    current_period = grid3.minting.Period()
+    last_period = grid3.minting.Period(offset=current_period.offset - 1)
+    periods = (current_period, last_period)
+    return con, periods
 
 def get_nodes(net, node_ids):
     """
@@ -197,6 +222,12 @@ def get_nodes(net, node_ids):
         if node.power is None: 
             node.power = {'state': None, 'target': None}
         node.status = get_node_status(node)
+
+        if node.status == 'standby':
+            node.farmerbot = True
+        else:
+            node.farmerbot = False
+        node.violations = {}
 
     return nodes
 
@@ -230,27 +261,33 @@ def get_node_status(node):
     else:
         return 'down'
 
-def initialize(context: CallbackContext):
+def get_violations(con, node_id, periods):
+    violations = []
+    for period in periods:
+        violations.extend(find_violations.check_node(con, node_id, period))
+    return violations
+
+def initialize(bot_data):
     for key in ['chats', 'nodes']:
-        context.bot_data.setdefault(key, {})
+        bot_data.setdefault(key, {})
 
     for net in NETWORKS:
-        context.bot_data['nodes'].setdefault(net, {})
+        bot_data['nodes'].setdefault(net, {})
 
     subs = 0
-    for chat, data in context.bot_data['chats'].items():
+    for chat, data in bot_data['chats'].items():
         for net in NETWORKS:
             if data['nodes'][net]:
                 subs += 1
                 break
-    print('{} chats and {} subscribed users'.format(len(context.bot_data['chats']), subs))
+    print('{} chats and {} subscribed users'.format(len(bot_data['chats']), subs))
 
-def migrate_data(context: CallbackContext):
+def migrate_data(bot_data):
     """
     Convert dict based node data to instances of Node class. Only needed when updating a bot that has existing data using the old style.
     """
     for net in NETWORKS:
-        nodes = context.bot_data['nodes'][net]
+        nodes = bot_data['nodes'][net]
         for node_id in nodes.keys():
             if type(nodes[node_id]) is dict:
                 nodes[node_id]['nodeID'] = node_id
@@ -275,6 +312,12 @@ def network(update: Update, context: CallbackContext):
 def new_user():
     return {'net': 'main', 'nodes': {'main': [], 'test': [], 'dev': []}}
 
+
+def node_used_farmerbot(con, node_id):
+    # Check if the node ever went standby, which is a requirement for it to receive a violation
+    result = con.execute("SELECT 1 FROM PowerStateChanged WHERE node_id=? AND state='Down'", (node_id,)).fetchone()
+    return result is not None
+
 def ping_rmb(net, nodes, timeout):
     """
     Ping one or more nodes via RMB.
@@ -298,26 +341,26 @@ def ping_rmb(net, nodes, timeout):
     up_nodes = [node for node in nodes if node.twinId in twins_replied]
     return up_nodes
 
-def populate_violations(context: CallbackContext):
+def populate_violations(bot_data):
     # Since we only want to notify users about _new_ violations, we need to establish a baseline at some point (when the feature is enabled or when a new bot is started for the first time)
-    if context.bot_data.setdefault('violations_populated', False):
+    if bot_data.setdefault('violations_populated', False):
         return
 
     # We only track violations for mainnet
-    nodes = context.bot_data['nodes']['main']
+    nodes = bot_data['nodes']['main']
 
-    con = sqlite3.connect(DB_FILE)
-    current_period = grid3.minting.Period()
-    last_period = grid3.minting.Period(offset=current_period.offset - 1)
+    con, periods = get_con_and_periods()
     
-    for node in nodes:
-        violations = find_violations.check_node(con, node_id, last_period)
-        violations.extend(find_violations.check_node(con, node_id, current_period))
-        node.violations = violations
+    for node_id, node in nodes.items():
+        violations = get_violations(con, node_id, periods)
+        # Violations are uniquely identified per node by their first field (time that wake up was initiated). Storing them in this form helps to easily identify new violations later
+        node.violations =  {v[0]: v for v in violations}
         if violations or node.status == 'standby':
             node.farmerbot = True
+        else:
+            node.farmerbot = False
 
-    context.bot_data['violations_populated'] = True
+    bot_data['violations_populated'] = True
 
 def send_message(context, chat_id, text):
     try:
@@ -341,9 +384,6 @@ Example: /network main
 
 /status - check the current status of one node. This is based on Grid proxy and should match what's reported by the explorer which updates relatively slowly.
 Example: /status 1
-
-/ping - check the current status of a node via a ping over Yggdrasil. This provides more responsive output than /status, but can misreport nodes as down if there's an issue with Yggdrasil.
-Example: /ping 42
 
 /subscribe (/sub) - subscribe to updates about one or more nodes. If you don't provide an input, the nodes you are currently subscribed to will be shown. 
 Example: /sub 1 2 3
@@ -472,12 +512,23 @@ def subscribe(update: Update, context: CallbackContext):
     try:
         new_ids = [n for n in node_ids if n not in subbed_nodes]
         new_nodes = {node.nodeId: node for node in get_nodes(net, new_ids)}
-        if not new_nodes:
+        if new_nodes:
+            # If there are nodes we haven't seen before, we need to check if they have been using farmerbot and if so preload any existing violations so they don't trigger alerts
+            known_nodes = context.bot_data['nodes'][net]
+            unknown_nodes = new_nodes.keys() - known_nodes.keys()
+            if unknown_nodes:
+                con, periods = get_con_and_periods()
+                for node_id in unknown_nodes:
+                    if node_used_farmerbot(con, node_id):
+                        violations = get_violations(con, node_id, periods)
+                        new_nodes[node_id].violations = {v[0]: v for v in violations}
+                    
+            known_nodes.update(new_nodes)
+            # Do this to preserve the order since gql does not
+            new_subs = [n for n in node_ids if n in new_nodes]
+        else:
             send_message(context, chat_id, text='No valid node ids found.')
             return
-        context.bot_data['nodes'][net].update(new_nodes)
-        #Do this to preserve the order since gql will not
-        new_subs = [n for n in node_ids if n in new_nodes]
     
     except:
         logging.exception("Failed to fetch node info")
@@ -550,7 +601,7 @@ def violations(update: Update, context: CallbackContext):
     chat_id = update.effective_chat.id
     node_id = int(context.args[0])
 
-    con = sqlite3.connect(DB_FILE)
+    con = sqlite3.connect(args.db_file)
     exists = con.execute('SELECT 1 FROM NodeUptimeReported WHERE node_id=?', (node_id,)).fetchone()
     if exists:
         send_message(context, chat_id, text='Checking for violations...')
@@ -618,9 +669,9 @@ if args.dump:
     print(dispatcher.bot_data)
     print()
 
-updater.job_queue.run_once(initialize, when=0)
-updater.job_queue.run_once(migrate_data, when=0) #Can remove after use
-updater.job_queue.run_once(populate_violations, when=0)
+initialize(dispatcher.bot_data)
+migrate_data(dispatcher.bot_data)
+populate_violations(dispatcher.bot_data)
 updater.job_queue.run_repeating(check_job, interval=args.poll, first=1)
 updater.job_queue.run_repeating(log_job, interval=3600, first=0)
 
