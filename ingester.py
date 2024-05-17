@@ -29,7 +29,7 @@ RETRIES = 3
 
 parser = argparse.ArgumentParser()
 parser.add_argument('-f', '--file', help='Specify the database file name.', 
-                    type=str, default='tfchain_data.db')
+                    type=str, default='tfchain.db')
 parser.add_argument('-s', '--start', 
                     help='Give a timestamp to start scanning blocks. If ommitted, scanning starts from beginning of current minting period', type=int)
 parser.add_argument('--start-block', 
@@ -51,7 +51,7 @@ def load_queue(start_number, end_number, block_queue):
     return len(missing_blocks)
 
 def db_writer(write_queue):
-    con = sqlite3.connect(args.file, timeout=DB_TIMEOUT)
+    con = new_connection()
     processed_blocks = get_processed_blocks(con)
 
     while 1:
@@ -76,33 +76,42 @@ def db_writer(write_queue):
 
 def fetch_powers(block_number, writer_queue):
     # To emulating minting properly, we need to know the power state and target of each node at the beginning of the minting period
-    # Get our own clients so this can run in a thread
-    con = sqlite3.connect(args.file, timeout=DB_TIMEOUT)
-    client = tfchain.TFChain()
+    
+    # Retry forever until we got all the data. I didn't see an error yet for this function, but we don't have any retry logic in the main loop for this part
+    while 1:
+        try:
+            # Get our own clients so this can run in a thread
+            con = new_connection()
+            client = tfchain.TFChain()
 
-    block = client.sub.get_block(block_number=block_number)
-    block_hash = block['header']['hash']
-    timestamp = client.get_timestamp(block) // 1000
+            block = client.sub.get_block(block_number=block_number)
+            block_hash = block['header']['hash']
+            timestamp = client.get_timestamp(block) // 1000
 
-    max_node = client.get_node_id(block_hash)
-    nodes = set(range(1, max_node + 1))
-    existing_powers = con.execute("SELECT node_id FROM PowerState WHERE block=?", (block_number,)).fetchall()
-    nodes -= {p[0] for p in existing_powers}
+            max_node = client.get_node_id(block_hash)
+            nodes = set(range(1, max_node + 1))
+            existing_powers = con.execute("SELECT node_id FROM PowerState WHERE block=?", (block_number,)).fetchall()
+            nodes -= {p[0] for p in existing_powers}
 
-    print('Fetching node powers for', len(nodes), 'nodes')
-    for node in nodes:
-        if node % 500 == 0:
-            print('Processed', node, 'initial power states/targets')
-        power = client.get_node_power(node, block_hash)
-        # I seem to remember there being some None values in here at some point, but it seems now that all nodes get a default of Up, Up
-        if power['state'] == 'Up':
-            state = 'Up'
-            down_block = None
-        else:
-            state = 'Down'
-            down_block = power['state']['Down']
-        con.execute("INSERT INTO PowerState VALUES(?, ?, ?, ?, ?, ?)", (node, state, down_block, power['target'], block_number, timestamp))
-        con.commit()
+            if not nodes:
+                break
+
+            print('Fetching node powers for', len(nodes), 'nodes')
+            for node in nodes:
+                if node % 500 == 0:
+                    print('Processed', node, 'initial power states/targets')
+                power = client.get_node_power(node, block_hash)
+                # I seem to remember there being some None values in here at some point, but it seems now that all nodes get a default of Up, Up
+                if power['state'] == 'Up':
+                    state = 'Up'
+                    down_block = None
+                else:
+                    state = 'Down'
+                    down_block = power['state']['Down']
+                con.execute("INSERT INTO PowerState VALUES(?, ?, ?, ?, ?, ?)", (node, state, down_block, power['target'], block_number, timestamp))
+                con.commit()
+        except Exception as e:
+            print('Got exception while fetching powers:', e)
 
 def get_block(client, block_number):
     block = client.sub.get_block(block_number=block_number)
@@ -112,6 +121,11 @@ def get_block(client, block_number):
 def get_processed_blocks(con):
     results = con.execute("SELECT * FROM processed_blocks").fetchall()
     return {r[0] for r in results}
+
+def new_connection():
+    con = sqlite3.connect(args.file, timeout=DB_TIMEOUT)
+    con.execute('PRAGMA journal_mode=wal')
+    return con
 
 def process_block(block, events):
     block_number = block['header']['number']
@@ -140,7 +154,7 @@ def process_block(block, events):
 
 def processor(block_queue, write_queue):
     # Each processor has its own TF Chain and db connections
-    con = sqlite3.connect(args.file, timeout=DB_TIMEOUT)
+    con = new_connection()
     client = tfchain.TFChain()
     while 1:
         block_number = block_queue.get()
@@ -180,6 +194,10 @@ def prep_db(con):
     con.execute("CREATE TABLE IF NOT EXISTS PowerState(node_id, state, down_block, target, block, timestamp, UNIQUE(node_id, block))")
 
     con.execute("CREATE TABLE IF NOT EXISTS processed_blocks(block_number PRIMARY KEY)")
+    
+    con.execute("CREATE TABLE IF NOT EXISTS kv(key UNIQUE, value)")
+    con.execute("INSERT OR IGNORE INTO kv VALUES('checkpoint_block', 0)")
+    con.execute("INSERT OR IGNORE INTO kv VALUES('checkpoint_time', 0)")
 
     con.commit()
 
@@ -216,7 +234,7 @@ def subscription_callback(block_queue, head, update_nr, subscription_id):
 print('Staring up, preparing to ingest some blocks, nom nom')
 
 # Prep database and grab already processed blocks
-con = sqlite3.connect(args.file, timeout=DB_TIMEOUT)
+con = new_connection()
 prep_db(con)
 
 results = con.execute("SELECT * FROM processed_blocks").fetchall()
@@ -274,32 +292,73 @@ if args.end or args.end_block:
     write_queue.put(None)
 
 else:
+    # This is the case where we continue running and fetch all new blocks as they are generated
+
     # Since using the subscribe method blocks, we give it a thread
     sub_thread = spawn_subsriber(block_queue, client)
 
-    # We wait to get the first block number back from the subscribe callback, so that we're sure which block is the end of the historic range we want
-    block = block_queue.get()
-    block_queue.put(block)
-    processes = parallelize(con, start_number, block - 1, block_queue, write_queue)
+    # We wait to get the first block number back from the subscribe callback, so that we're sure which block is the end of the historic range we want to queue up
+    block_number = block_queue.get()
+    block_queue.put(block_number)
+    processes = parallelize(con, start_number, block_number - 1, block_queue, write_queue)
+
+    current_period = minting.Period()
+    processed_count = con.execute('SELECT COUNT(1) FROM processed_blocks').fetchone()[0]
+
+    checkpoint_block = con.execute("SELECT value FROM kv WHERE key='checkpoint_block'").fetchone()[0]
+    if checkpoint_block == 0:
+        con.execute("UPDATE kv SET value=? WHERE key='checkpoint_block'", (start_number,))
+        con.commit()
 
     while 1:
         time.sleep(SLEEP_TIME)
 
-        # We can periodically get disconnected from the websocket, especially if running on a machine that goes into standby. On each loop we try once to reconnect if needed before trying to use the client below
+        # We can periodically get disconnected from the websocket. On each loop we try once to reconnect in case we need the client below
         if not client.sub.websocket.connected:
             client.sub.connect_websocket()
 
-        try:
-            current_number = client.sub.get_block_header()['header']['number']
-            load_queue(start_number, current_number, block_queue)
-        except WebSocketConnectionClosedException:
-            print("Web socket closed in main loop")
-
         # We just discard any processes that have died for any reason. They will be replaced by the auto scaling. In fact, we don't try to handle errors at all in the worker processes--the blocks just get retried later
         processes = [t for t in processes if t.is_alive()]
-        print(datetime.datetime.now(), block_queue.qsize(), 'blocks remaining', len(processes), 'processes alive', write_queue.qsize(), 'write jobs')
+        new_count = con.execute('SELECT COUNT(1) FROM processed_blocks').fetchone()[0]
+        print('{} processed {} blocks in {} seconds {} blocks queued {} processes alive {} write jobs'.format(datetime.datetime.now(), new_count - processed_count, SLEEP_TIME, block_queue.qsize(), len(processes), write_queue.qsize()))
+        processed_count = new_count
+
+        # Check for missing blocks only when the queue is cleared, to avoid placing duplicate entries in the queue. In theory it's possible the queue never empties due to bad conditions, but in practice the resting state is an empty block queue
+        # We record the max block for which we have processed all preceeding blocks as a "checkpoint" and also the timestamp. This helps keep this computation in check as the size of processed blocks grows. We'll also use the checkpoint timestamps when searching for violations, to see if block processing has fallen behind
+        if block_queue.qsize() == 0:
+            first_block = con.execute("SELECT value FROM kv WHERE key='checkpoint_block'").fetchone()[0]
+            print('Block checkpoint is:', first_block)
+            print('Block checkpoint time is:', con.execute("SELECT value FROM kv WHERE key='checkpoint_time'").fetchone()[0])
+
+            processed_blocks = con.execute('SELECT block_number FROM processed_blocks WHERE block_number >= ?', (first_block,)).fetchall()
+            processed_blocks = {b[0] for b in processed_blocks}
+
+            last_block = max(processed_blocks)
+            all_blocks = {b for b in range(first_block, last_block + 1)}
+            missing_blocks = all_blocks - processed_blocks
+
+            if missing_blocks:
+                for b in missing_blocks:
+                    block_queue.put(b)
+                print('Queued', len(missing_blocks), 'missing blocks')
+            else:
+                # TODO: Ideally we would store the timestamps of the blocks as they are processed initially rather than querying for it again
+                block = client.sub.get_block(block_number=last_block)
+                timestamp = client.get_timestamp(block) // 1000
+                with con:
+                    con.execute("UPDATE kv SET value=? WHERE key='checkpoint_block'", (last_block,))
+                    con.execute("UPDATE kv SET value=? WHERE key='checkpoint_time'", (timestamp,))
+
 
         scale_workers(processes, block_queue, write_queue)
+
+        # If we have entered a new minting period, spawn a thread to fetch the power info for each node at the start of the new period
+        period = minting.Period()
+        if period.offset > current_period.offset:
+            start_number = client.find_block_minting(period.start)
+            Thread(target=fetch_powers, args=[start_number, write_queue]).start()
+            current_period = period
+
 
         # Also make sure we keep alive our subscription thread. If there's an error in the callback, it propagates up and the thread dies
         if not sub_thread.is_alive():
