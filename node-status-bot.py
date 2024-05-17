@@ -138,9 +138,9 @@ def check_job(context: CallbackContext):
                     for v in violations:
                         if v[0] not in node.violations:
                             for chat_id in subbed_nodes[node.nodeId]:
-                                send_message(context, chat_id, text='Farmerbot violation detected for node {}. {} 🚨'.format(node.nodeId, format_violation(v)))
+                                send_message(context, chat_id, text='🚨 Farmerbot violation detected for node {}. Node failed to boot within 30 minutes 🚨\n\n{}'.format(node.nodeId, format_violation(v)))
                         
-                        # We do this every time because information about when a node finally booted might become available later
+                        # We do this every time because information about when a node finally booted might become available later. Right now we don't use this info though. Might be effective as a cache for manual violation lookups
                         node.violations[v[0]] = v
 
             except:
@@ -192,13 +192,33 @@ def format_verticle_list(items):
     return text
 
 def format_violation(violation):
-    if violation[1] is None:
-        return 'Boot requested at {} but node has not booted'.format(datetime.fromtimestamp(violation[0]))
+    requested, booted = violation
+    text = ''
+    requested = datetime.fromtimestamp(requested)
+    text += '<i>Boot requested at:</i>\n'
+    text += '{} UTC\n'.format(requested)
+    if booted:
+        booted = datetime.fromtimestamp(booted)
+        text += '<i>Node booted at:</i>\n'
+        text += '{} UTC\n'.format(booted)
     else:
-        return 'Boot requested at {} but node booted at {}'.format(datetime.fromtimestamp(violation[0]), datetime.fromtimestamp(violation[1]))
+        text += 'Node has not booted\n'
+    return text
 
-def format_violations(violations):
-    return format_verticle_list([format_violation(v) for v in violations])
+def format_violations(node_id, violations):
+    text = '<b><u>Violations for node {}:</u></b>\n\n'.format(node_id)
+    for requested, booted in violations:
+        requested = datetime.fromtimestamp(requested)
+        text += '<i>Boot requested at:</i>\n'
+        text += '{} UTC\n'.format(requested)
+        if booted:
+            booted = datetime.fromtimestamp(booted)
+            text += '<i>Node booted at:</i>\n'
+            text += '{} UTC\n'.format(booted)
+        else:
+            text += 'Node has not booted\n'
+        text += '\n'
+    return text
 
 def get_con_and_periods():
     con = sqlite3.connect(args.db_file)
@@ -527,7 +547,10 @@ def subscribe(update: Update, context: CallbackContext):
             # Do this to preserve the order since gql does not
             new_subs = [n for n in node_ids if n in new_nodes]
         else:
-            send_message(context, chat_id, text='No valid node ids found.')
+            text = 'No valid node ids found to add.'
+            if subbed_nodes:
+                text += ' You are currently subscribed to node' + format_list(subbed_nodes)
+            send_message(context, chat_id, text=text)
             return
     
     except:
@@ -599,20 +622,47 @@ def unsubscribe(update: Update, context: CallbackContext):
 
 def violations(update: Update, context: CallbackContext):
     chat_id = update.effective_chat.id
-    node_id = int(context.args[0])
 
-    con = sqlite3.connect(args.db_file)
-    exists = con.execute('SELECT 1 FROM NodeUptimeReported WHERE node_id=?', (node_id,)).fetchone()
-    if exists:
+    # This is mostly copied from the subscribe command. TODO: refactor?
+    node_ids = []
+    if context.args:
+        try:
+            for arg in context.args:
+                node_ids.append(int(arg))
+        except ValueError:
+            send_message(context, chat_id, text='There was a problem processing your input. This command accepts one or more node ids separated by a space.')
+            return
+    else:
+        user = context.bot_data['chats'].setdefault(chat_id, new_user())
+        subbed_nodes = user['nodes'][user['net']]
+        if not subbed_nodes:
+            send_message(context, chat_id, text='No input detected and no active subscriptions. Please try again with one or more valid node ids.')
+            return
+        else:
+            node_ids = subbed_nodes
+
+    farmerbot_node_ids = []
+    for node_id in node_ids:
+        con = sqlite3.connect(args.db_file)
+        exists = con.execute('SELECT 1 FROM NodeUptimeReported WHERE node_id=?', (node_id,)).fetchone()
+        if exists:
+            farmerbot_node_ids.append(node_id)
+
+    if not farmerbot_node_ids:
+        send_message(context, chat_id, text='None of the nodes to check appear to have used the farmerbot.')
+        return
+    else:
         send_message(context, chat_id, text='Checking for violations...')
         current_period = grid3.minting.Period()
-        last_period = grid3.minting.Period(offset=current_period.offset - 1)
-        violations = find_violations.check_node(con, node_id, last_period)
-        violations.extend(find_violations.check_node(con, node_id, current_period))
-        if violations:
-            send_message(context, chat_id, text='Violations found for this node:\n' + format_violations(violations))
+        text = ''
+        for node_id in farmerbot_node_ids:
+            violations = find_violations.check_node(con, node_id, current_period)
+            if violations:
+                text += format_violations(node_id, violations) + '\n'
+        if text:
+            send_message(context, chat_id, text=text)
         else:
-            send_message(context, chat_id, text='No violations found for this node')
+            send_message(context, chat_id, text='No violations found')
 
 def send_logs(update: Update, context: CallbackContext):
     if update.effective_chat.id != args.admin:
