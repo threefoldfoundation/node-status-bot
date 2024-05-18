@@ -210,7 +210,7 @@ def scale_workers(processes, block_queue, write_queue):
     if block_queue.qsize() < MAX_WORKERS and len(processes) < MIN_WORKERS:
         print('Queue is small, but fewer than', MIN_WORKERS, 'workers are alive. Spawning more workers')
         for i in range(MIN_WORKERS - len(processes)):
-            processes.append(spawn_worker(block_queue))
+            processes.append(spawn_worker(block_queue, write_queue))
 
     if block_queue.qsize() > MAX_WORKERS and len(processes) < MAX_WORKERS:
         print('More than', MAX_WORKERS, 'jobs remaining but fewer processes. Spawning more workers')
