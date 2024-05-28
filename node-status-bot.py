@@ -20,6 +20,8 @@ import find_violations
 
 NETWORKS = ['main', 'test', 'dev']
 DEFAULT_PING_TIMEOUT = 10
+# Increasing from 5 to 10 workers on a system with 8 threads only reduced run time by about 1 second
+DB_WORKERS = 5
 
 parser = argparse.ArgumentParser()
 parser.add_argument('token', help='Specify a bot token')
@@ -87,7 +89,6 @@ def check_job(context: CallbackContext):
     """
     The main attraction. This function collects all the node ids that have an active subscription, checks their status, then sends alerts to users whose nodes have a status change.
     """
-    con = sqlite3.connect(args.db_file)
     current_period = grid3.minting.Period()
     last_period = grid3.minting.Period(offset=current_period.offset - 1)
     periods = (current_period, last_period)
@@ -101,6 +102,15 @@ def check_job(context: CallbackContext):
                 for node_id in data['nodes'][net]:
                     subbed_nodes.setdefault(node_id, []).append(chat_id)
             updates = get_nodes(net, subbed_nodes)
+
+            if net == 'main':
+                farmerbot_nodes = [n for n in subbed_nodes]
+                results = find_violations.check_nodes_parallel(args.db_file, [(n, p) for n in farmerbot_nodes for p in periods], DB_WORKERS)
+                all_violations = {}
+                for result in results:
+                    # Results are (node_id, period, violations)
+                    all_violations.setdefault(result[0], []).extend(result[2])
+
         except:
             logging.exception("Error fetching node data for check")
             continue
@@ -133,8 +143,8 @@ def check_job(context: CallbackContext):
                 if node.status == 'standby' or update.status == 'standby':
                     node.farmerbot = True
 
-                if node.farmerbot:
-                    violations = get_violations(con, node.nodeId, periods)
+                if node.nodeId in all_violations:
+                    violations = all_violations[node.nodeId]
                     for v in violations:
                         if v[0] not in node.violations:
                             for chat_id in subbed_nodes[node.nodeId]:
