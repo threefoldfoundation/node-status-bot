@@ -17,11 +17,9 @@ from websocket._exceptions import WebSocketConnectionClosedException
 import grid3.network
 from grid3 import tfchain, minting
 
-MAX_WORKERS = 50
 MIN_WORKERS = 2
 SLEEP_TIME = 30
 DB_TIMEOUT = 30
-WRITE_BATCH = 100
 POST_PERIOD = 60 * 60
 
 # When querying a fixed period of blocks, how many times to retry missed blocks
@@ -38,6 +36,8 @@ parser.add_argument('-e', '--end',
                     help='By default, scanning continues to process new blocks as they are generated. When an end timestamp is given, scanning stops at that block height and the program exits', type=int)
 parser.add_argument('--end-block', 
                     help='Specify end by block number rather than timestamp', type=int)
+parser.add_argument('-m', '--max-workers', 
+                    help='Maximum number of worker processes to spawn', type=int, default=50)            
 
 args = parser.parse_args()
 
@@ -114,6 +114,8 @@ def fetch_powers(block_number, writer_queue):
             print('Got exception while fetching powers:', e)
 
 def get_block(client, block_number):
+    # Sometimes we get None here (but only on remote VM?)
+    # Maybe better to handle gracefully rather than let proc die
     block = client.sub.get_block(block_number=block_number)
     events = client.sub.get_events(block['header']['hash'])
     return block, events
@@ -177,9 +179,9 @@ def processor(block_queue, write_queue):
 def parallelize(con, start_number, end_number, block_queue, write_queue):
     load_queue(start_number, end_number, block_queue)
 
-    print('Starting', MAX_WORKERS, 'workers to process', block_queue.qsize(), 'blocks, with starting block number', start_number, 'and ending block number', end_number)
+    print('Starting', args.max_workers, 'workers to process', block_queue.qsize(), 'blocks, with starting block number', start_number, 'and ending block number', end_number)
 
-    processes = [spawn_worker(block_queue, write_queue) for i in range(MAX_WORKERS)]
+    processes = [spawn_worker(block_queue, write_queue) for i in range(args.max_workers)]
     return processes
 
 def prep_db(con):
@@ -207,14 +209,14 @@ def scale_workers(processes, block_queue, write_queue):
         for i in range(len(processes) - MIN_WORKERS):
             block_queue.put(-1 - i)
 
-    if block_queue.qsize() < MAX_WORKERS and len(processes) < MIN_WORKERS:
+    if block_queue.qsize() < args.max_workers and len(processes) < MIN_WORKERS:
         print('Queue is small, but fewer than', MIN_WORKERS, 'workers are alive. Spawning more workers')
         for i in range(MIN_WORKERS - len(processes)):
             processes.append(spawn_worker(block_queue, write_queue))
 
-    if block_queue.qsize() > MAX_WORKERS and len(processes) < MAX_WORKERS:
-        print('More than', MAX_WORKERS, 'jobs remaining but fewer processes. Spawning more workers')
-        for i in range(MAX_WORKERS - len(processes)):
+    if block_queue.qsize() > args.max_workers and len(processes) < args.max_workers:
+        print('More than', args.max_workers, 'jobs remaining but fewer processes. Spawning more workers')
+        for i in range(args.max_workers - len(processes)):
             processes.append(spawn_worker(block_queue, write_queue))
 
 def spawn_subsriber(block_queue, client):
@@ -364,3 +366,5 @@ else:
         if not sub_thread.is_alive():
             print("Subscription thread died, respawning it")
             sub_thread = spawn_subsriber(block_queue, client)
+
+        #TODO: we should also check and respawn the writer process if needed
