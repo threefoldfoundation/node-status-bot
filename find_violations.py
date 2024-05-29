@@ -97,10 +97,13 @@ def check_node(con, node, period, verbose=False):
 
 def check_nodes_parallel(db_file, jobs, worker_count):
     """Each job is a node, period tuple"""
-    job_queue = multiprocessing.Queue()
+    job_queue = multiprocessing.JoinableQueue()
     result_queue = multiprocessing.Queue()
     for job in jobs:
         job_queue.put(job)
+
+    # job_queue.close()
+    # job_queue.join_thread()
 
     workers = []
     for i in range(worker_count):
@@ -108,8 +111,7 @@ def check_nodes_parallel(db_file, jobs, worker_count):
         proc.start()
         workers.append(proc)
 
-    for worker in workers:
-        worker.join()
+    job_queue.join()
 
     results = []
     while 1:
@@ -117,7 +119,7 @@ def check_nodes_parallel(db_file, jobs, worker_count):
             results.append(result_queue.get_nowait())
         except queue.Empty:
             break
-
+        
     return results
 
 def worker_job(db_file, job_queue, result_queue):
@@ -126,6 +128,7 @@ def worker_job(db_file, job_queue, result_queue):
         try:
             node_id, period = job_queue.get_nowait()
             result_queue.put((node_id, period, check_node(con, node_id, period)))
+            job_queue.task_done()
         except queue.Empty:
             return
 
