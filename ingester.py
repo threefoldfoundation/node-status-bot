@@ -3,11 +3,9 @@ This program is a standalone complement to the node status bot that gathers data
 
 So far not much of an attempt is made to catch all errors or ensure that the program continues running. Best to launch it from a process manager and ensure it's restarted on exit. All data is written in a transactional way, such that the results of processing any block, along with the fact that the block has been processed will all be written or all not be written on a given attempt.
 
-Some apparently unavoidable errors arise from use of the Python Substrate Interface module. It seems to not handing concurrency well and sometimes gives a "decoding failed error". That in itself is not a big problem, as it tends to only affect one thread and the thread will just exit and respawn. However I've also observed a rare and odd failure state where these errors become chronic along with database locked errors from SQLite. I had already eliminated a database locking issue and I don't see now how it can happen. Weird bug.
+Some apparently unavoidable errors arise from use of the Python Substrate Interface module with threads. This seems to be resolved by switching to mostly using processes instead.
 
-TODO: Somehow address bug as just described. One way would be to look for a lot of thread failures and just bail at that point. Since the issue seems to occur only during specific starts of the program and does not tend to reoccur.
-
-Still getting db locked errors sometimes. There's now a dedicated writer process, but the fetch_powers also writes to the db on its own when it's running. Even when just the writer process is running, it's still possible to timeout with locked db, for reasons I don't understand. For now I increased the db timeout to 30 seconds and that helps.
+Database locked issues were apparently resolved by switching to using WAL mode. Yay.
 """
 
 import sqlite3, datetime, time, logging, functools, argparse
@@ -76,6 +74,7 @@ def db_writer(write_queue):
 
 def fetch_powers(block_number, writer_queue):
     # To emulating minting properly, we need to know the power state and target of each node at the beginning of the minting period
+    # We also look up and store the timestamp of the block when a node went to sleep if it's asleep at the beginning of the period, since it can be essential to computing violations in some rarer cases. Storing the timestamp of all blocks along with their number in the processed blocks table could be a way to make this faster at the expense of a marginal amount of extra disk space, but this is overall not a huge part of the data fetched so I didn't bother with that for now.
     
     # Retry forever until we got all the data. I didn't see an error yet for this function, but we don't have any retry logic in the main loop for this part
     while 1:
@@ -107,8 +106,10 @@ def fetch_powers(block_number, writer_queue):
                     down_block = None
                 else:
                     state = 'Down'
-                    down_block = power['state']['Down']
-                con.execute("INSERT INTO PowerState VALUES(?, ?, ?, ?, ?, ?)", (node, state, down_block, power['target'], block_number, timestamp))
+                    down_block_number = power['state']['Down']
+                    down_block = client.sub.get_block(block_number=down_block_number)
+                    down_time = client.get_timestamp(down_block) // 1000
+                con.execute("INSERT INTO PowerState VALUES(?, ?, ?, ?, ?, ?)", (node, state, down_block_number, down_time, power['target'], block_number, timestamp))
                 con.commit()
         except Exception as e:
             print('Got exception while fetching powers:', e)
@@ -193,7 +194,7 @@ def prep_db(con):
 
     con.execute("CREATE TABLE IF NOT EXISTS PowerStateChanged(farm_id, node_id, state, down_block, block, event_index, timestamp, UNIQUE(event_index, block))")
 
-    con.execute("CREATE TABLE IF NOT EXISTS PowerState(node_id, state, down_block, target, block, timestamp, UNIQUE(node_id, block))")
+    con.execute("CREATE TABLE IF NOT EXISTS PowerState(node_id, state, down_block, down_time target, block, timestamp, UNIQUE(node_id, block))")
 
     con.execute("CREATE TABLE IF NOT EXISTS processed_blocks(block_number PRIMARY KEY)")
     
@@ -233,138 +234,140 @@ def spawn_worker(block_queue, write_queue):
 def subscription_callback(block_queue, head, update_nr, subscription_id):
     block_queue.put(head['header']['number'])
 
-print('Staring up, preparing to ingest some blocks, nom nom')
 
-# Prep database and grab already processed blocks
-con = new_connection()
-prep_db(con)
+if __name__ == '__main__':
+    print('Staring up, preparing to ingest some blocks, nom nom')
 
-results = con.execute("SELECT * FROM processed_blocks").fetchall()
-processed_blocks = {r[0] for r in results}
+    # Prep database and grab already processed blocks
+    con = new_connection()
+    prep_db(con)
 
-# Start tfchain client
-client = tfchain.TFChain()
+    results = con.execute("SELECT * FROM processed_blocks").fetchall()
+    processed_blocks = {r[0] for r in results}
 
-if args.start_block:
-    start_number = args.start_block
-elif args.start:  
-    start_number = client.find_block_minting(args.start)
-else:
-    # By default, use beginning of current minting period
-    start_number = client.find_block_minting(minting.Period().start)
+    # Start tfchain client
+    client = tfchain.TFChain()
 
-block_queue = JoinableQueue()
-write_queue = JoinableQueue()
-
-writer_proc = Process(target=db_writer, args=[write_queue])
-writer_proc.start()
-
-powers_thread = Thread(target=fetch_powers, args=[start_number, write_queue])
-powers_thread.start()
-
-if args.end or args.end_block:
-    if args.end_block:
-        end_number = args.end_block
+    if args.start_block:
+        start_number = args.start_block
+    elif args.start:  
+        start_number = client.find_block_minting(args.start)
     else:
-        end_number = client.find_block_minting(args.end + POST_PERIOD)
+        # By default, use beginning of current minting period
+        start_number = client.find_block_minting(minting.Period().start)
 
-    processes = parallelize(con, start_number, end_number, block_queue, write_queue)
+    block_queue = JoinableQueue()
+    write_queue = JoinableQueue()
 
-    while (block_qsize := block_queue.qsize()) > 0:
-        time.sleep(SLEEP_TIME)
-        processes = [t for t in processes if t.is_alive()]
-        print(datetime.datetime.now(), 'processed', block_qsize - block_queue.qsize(), 'blocks in', SLEEP_TIME, 'seconds', block_queue.qsize(), 'blocks remaining', len(processes), 'processes alive', write_queue.qsize(), 'write jobs')
-        scale_workers(processes, block_queue, write_queue)
+    writer_proc = Process(target=db_writer, args=[write_queue])
+    writer_proc.start()
 
-    print('Joining blocks queue')
-    block_queue.join()
-    print('Joining write queue')
-    write_queue.join()
-    # Retry any missed blocks three times. Since we don't handle errors in the when fetching and processing blocks, it's normal to miss a few
-    while missing_count := load_queue(start_number, end_number, block_queue):
-        print(datetime.datetime.now(), missing_count, 'blocks to retry', len(processes), 'processes alive')
+    powers_thread = Thread(target=fetch_powers, args=[start_number, write_queue])
+    powers_thread.start()
+
+    if args.end or args.end_block:
+        if args.end_block:
+            end_number = args.end_block
+        else:
+            end_number = client.find_block_minting(args.end + POST_PERIOD)
+
+        processes = parallelize(con, start_number, end_number, block_queue, write_queue)
+
+        while (block_qsize := block_queue.qsize()) > 0:
+            time.sleep(SLEEP_TIME)
+            processes = [t for t in processes if t.is_alive()]
+            print(datetime.datetime.now(), 'processed', block_qsize - block_queue.qsize(), 'blocks in', SLEEP_TIME, 'seconds', block_queue.qsize(), 'blocks remaining', len(processes), 'processes alive', write_queue.qsize(), 'write jobs')
+            scale_workers(processes, block_queue, write_queue)
+
+        print('Joining blocks queue')
+        block_queue.join()
+        print('Joining write queue')
+        write_queue.join()
+        # Retry any missed blocks three times. Since we don't handle errors in the when fetching and processing blocks, it's normal to miss a few
+        while missing_count := load_queue(start_number, end_number, block_queue):
+            print(datetime.datetime.now(), missing_count, 'blocks to retry', len(processes), 'processes alive')
+            block_queue.join()
+            write_queue.join()
+
+        # Finally wait for any remaining jobs to complete
         block_queue.join()
         write_queue.join()
+        # Signal remaining processes to exit
+        [block_queue.put(-1) for p in processes if p.is_alive()]
+        write_queue.put(None)
 
-    # Finally wait for any remaining jobs to complete
-    block_queue.join()
-    write_queue.join()
-    # Signal remaining processes to exit
-    [block_queue.put(-1) for t in processes if t.is_alive()]
-    write_queue.put(None)
+    else:
+        # This is the case where we continue running and fetch all new blocks as they are generated
 
-else:
-    # This is the case where we continue running and fetch all new blocks as they are generated
+        # Since using the subscribe method blocks, we give it a thread
+        sub_thread = spawn_subsriber(block_queue, client)
 
-    # Since using the subscribe method blocks, we give it a thread
-    sub_thread = spawn_subsriber(block_queue, client)
+        # We wait to get the first block number back from the subscribe callback, so that we're sure which block is the end of the historic range we want to queue up
+        block_number = block_queue.get()
+        block_queue.put(block_number)
+        processes = parallelize(con, start_number, block_number - 1, block_queue, write_queue)
 
-    # We wait to get the first block number back from the subscribe callback, so that we're sure which block is the end of the historic range we want to queue up
-    block_number = block_queue.get()
-    block_queue.put(block_number)
-    processes = parallelize(con, start_number, block_number - 1, block_queue, write_queue)
+        current_period = minting.Period()
+        processed_count = con.execute('SELECT COUNT(1) FROM processed_blocks').fetchone()[0]
 
-    current_period = minting.Period()
-    processed_count = con.execute('SELECT COUNT(1) FROM processed_blocks').fetchone()[0]
+        checkpoint_block = con.execute("SELECT value FROM kv WHERE key='checkpoint_block'").fetchone()[0]
+        if checkpoint_block == 0:
+            con.execute("UPDATE kv SET value=? WHERE key='checkpoint_block'", (start_number,))
+            con.commit()
 
-    checkpoint_block = con.execute("SELECT value FROM kv WHERE key='checkpoint_block'").fetchone()[0]
-    if checkpoint_block == 0:
-        con.execute("UPDATE kv SET value=? WHERE key='checkpoint_block'", (start_number,))
-        con.commit()
+        while 1:
+            time.sleep(SLEEP_TIME)
 
-    while 1:
-        time.sleep(SLEEP_TIME)
+            # We can periodically get disconnected from the websocket. On each loop we try once to reconnect in case we need the client below
+            if not client.sub.websocket.connected:
+                client.sub.connect_websocket()
 
-        # We can periodically get disconnected from the websocket. On each loop we try once to reconnect in case we need the client below
-        if not client.sub.websocket.connected:
-            client.sub.connect_websocket()
+            # We just discard any processes that have died for any reason. They will be replaced by the auto scaling. In fact, we don't try to handle errors at all in the worker processes--the blocks just get retried later
+            processes = [t for t in processes if t.is_alive()]
+            new_count = con.execute('SELECT COUNT(1) FROM processed_blocks').fetchone()[0]
+            print('{} processed {} blocks in {} seconds {} blocks queued {} processes alive {} write jobs'.format(datetime.datetime.now(), new_count - processed_count, SLEEP_TIME, block_queue.qsize(), len(processes), write_queue.qsize()))
+            processed_count = new_count
 
-        # We just discard any processes that have died for any reason. They will be replaced by the auto scaling. In fact, we don't try to handle errors at all in the worker processes--the blocks just get retried later
-        processes = [t for t in processes if t.is_alive()]
-        new_count = con.execute('SELECT COUNT(1) FROM processed_blocks').fetchone()[0]
-        print('{} processed {} blocks in {} seconds {} blocks queued {} processes alive {} write jobs'.format(datetime.datetime.now(), new_count - processed_count, SLEEP_TIME, block_queue.qsize(), len(processes), write_queue.qsize()))
-        processed_count = new_count
+            # Check for missing blocks only when the queue is cleared, to avoid placing duplicate entries in the queue. In theory it's possible the queue never empties due to bad conditions, but in practice the resting state is an empty block queue
+            # We record the max block for which we have processed all preceeding blocks as a "checkpoint" and also the timestamp. This helps keep this computation in check as the size of processed blocks grows. We'll also use the checkpoint timestamps when searching for violations, to see if block processing has fallen behind
+            if block_queue.qsize() == 0:
+                first_block = con.execute("SELECT value FROM kv WHERE key='checkpoint_block'").fetchone()[0]
+                print('Block checkpoint is:', first_block)
+                print('Block checkpoint time is:', con.execute("SELECT value FROM kv WHERE key='checkpoint_time'").fetchone()[0])
 
-        # Check for missing blocks only when the queue is cleared, to avoid placing duplicate entries in the queue. In theory it's possible the queue never empties due to bad conditions, but in practice the resting state is an empty block queue
-        # We record the max block for which we have processed all preceeding blocks as a "checkpoint" and also the timestamp. This helps keep this computation in check as the size of processed blocks grows. We'll also use the checkpoint timestamps when searching for violations, to see if block processing has fallen behind
-        if block_queue.qsize() == 0:
-            first_block = con.execute("SELECT value FROM kv WHERE key='checkpoint_block'").fetchone()[0]
-            print('Block checkpoint is:', first_block)
-            print('Block checkpoint time is:', con.execute("SELECT value FROM kv WHERE key='checkpoint_time'").fetchone()[0])
+                processed_blocks = con.execute('SELECT block_number FROM processed_blocks WHERE block_number >= ?', (first_block,)).fetchall()
+                processed_blocks = {b[0] for b in processed_blocks}
 
-            processed_blocks = con.execute('SELECT block_number FROM processed_blocks WHERE block_number >= ?', (first_block,)).fetchall()
-            processed_blocks = {b[0] for b in processed_blocks}
+                last_block = max(processed_blocks)
+                all_blocks = {b for b in range(first_block, last_block + 1)}
+                missing_blocks = all_blocks - processed_blocks
 
-            last_block = max(processed_blocks)
-            all_blocks = {b for b in range(first_block, last_block + 1)}
-            missing_blocks = all_blocks - processed_blocks
-
-            if missing_blocks:
-                for b in missing_blocks:
-                    block_queue.put(b)
-                print('Queued', len(missing_blocks), 'missing blocks')
-            else:
-                # TODO: Ideally we would store the timestamps of the blocks as they are processed initially rather than querying for it again
-                block = client.sub.get_block(block_number=last_block)
-                timestamp = client.get_timestamp(block) // 1000
-                with con:
-                    con.execute("UPDATE kv SET value=? WHERE key='checkpoint_block'", (last_block,))
-                    con.execute("UPDATE kv SET value=? WHERE key='checkpoint_time'", (timestamp,))
+                if missing_blocks:
+                    for b in missing_blocks:
+                        block_queue.put(b)
+                    print('Queued', len(missing_blocks), 'missing blocks')
+                else:
+                    # TODO: Ideally we would store the timestamps of the blocks as they are processed initially rather than querying for it again
+                    block = client.sub.get_block(block_number=last_block)
+                    timestamp = client.get_timestamp(block) // 1000
+                    with con:
+                        con.execute("UPDATE kv SET value=? WHERE key='checkpoint_block'", (last_block,))
+                        con.execute("UPDATE kv SET value=? WHERE key='checkpoint_time'", (timestamp,))
 
 
-        scale_workers(processes, block_queue, write_queue)
+            scale_workers(processes, block_queue, write_queue)
 
-        # If we have entered a new minting period, spawn a thread to fetch the power info for each node at the start of the new period
-        period = minting.Period()
-        if period.offset > current_period.offset:
-            start_number = client.find_block_minting(period.start)
-            Thread(target=fetch_powers, args=[start_number, write_queue]).start()
-            current_period = period
+            # If we have entered a new minting period, spawn a thread to fetch the power info for each node at the start of the new period
+            period = minting.Period()
+            if period.offset > current_period.offset:
+                start_number = client.find_block_minting(period.start)
+                Thread(target=fetch_powers, args=[start_number, write_queue]).start()
+                current_period = period
 
 
-        # Also make sure we keep alive our subscription thread. If there's an error in the callback, it propagates up and the thread dies
-        if not sub_thread.is_alive():
-            print("Subscription thread died, respawning it")
-            sub_thread = spawn_subsriber(block_queue, client)
+            # Also make sure we keep alive our subscription thread. If there's an error in the callback, it propagates up and the thread dies
+            if not sub_thread.is_alive():
+                print("Subscription thread died, respawning it")
+                sub_thread = spawn_subsriber(block_queue, client)
 
-        #TODO: we should also check and respawn the writer process if needed
+            #TODO: we should also check and respawn the writer process if needed
