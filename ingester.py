@@ -23,23 +23,6 @@ POST_PERIOD = 60 * 60
 # When querying a fixed period of blocks, how many times to retry missed blocks
 RETRIES = 3
 
-parser = argparse.ArgumentParser()
-parser.add_argument('-f', '--file', help='Specify the database file name.', 
-                    type=str, default='tfchain.db')
-parser.add_argument('-s', '--start', 
-                    help='Give a timestamp to start scanning blocks. If ommitted, scanning starts from beginning of current minting period', type=int)
-parser.add_argument('--start-block', 
-                    help='Give a block number to start scanning blocks', type=int)
-parser.add_argument('-e', '--end', 
-                    help='By default, scanning continues to process new blocks as they are generated. When an end timestamp is given, scanning stops at that block height and the program exits', type=int)
-parser.add_argument('--end-block', 
-                    help='Specify end by block number rather than timestamp', type=int)
-parser.add_argument('-m', '--max-workers', 
-                    help='Maximum number of worker processes to spawn', type=int, default=50)            
-
-args = parser.parse_args()
-
-
 def load_queue(start_number, end_number, block_queue):
     total_blocks = set(range(start_number, end_number + 1))
     processed_blocks = get_processed_blocks(con)
@@ -72,7 +55,7 @@ def db_writer(write_queue):
         finally:
             write_queue.task_done()
 
-def fetch_powers(block_number, writer_queue):
+def fetch_powers(block_number, db_file=None):
     # To emulating minting properly, we need to know the power state and target of each node at the beginning of the minting period
     # We also look up and store the timestamp of the block when a node went to sleep if it's asleep at the beginning of the period, since it can be essential to computing violations in some rarer cases. Storing the timestamp of all blocks along with their number in the processed blocks table could be a way to make this faster at the expense of a marginal amount of extra disk space, but this is overall not a huge part of the data fetched so I didn't bother with that for now.
     
@@ -80,7 +63,7 @@ def fetch_powers(block_number, writer_queue):
     while 1:
         try:
             # Get our own clients so this can run in a thread
-            con = new_connection()
+            con = new_connection(db_file=db_file)
             client = tfchain.TFChain()
 
             block = client.sub.get_block(block_number=block_number)
@@ -103,13 +86,14 @@ def fetch_powers(block_number, writer_queue):
                 # I seem to remember there being some None values in here at some point, but it seems now that all nodes get a default of Up, Up
                 if power['state'] == 'Up':
                     state = 'Up'
-                    down_block = None
+                    down_block_number = None
+                    down_time = None
                 else:
                     state = 'Down'
                     down_block_number = power['state']['Down']
                     down_block = client.sub.get_block(block_number=down_block_number)
                     down_time = client.get_timestamp(down_block) // 1000
-                con.execute("INSERT INTO PowerState VALUES(?, ?, ?, ?, ?, ?)", (node, state, down_block_number, down_time, power['target'], block_number, timestamp))
+                con.execute("INSERT INTO PowerState VALUES(?, ?, ?, ?, ?, ?, ?)", (node, state, down_block_number, down_time, power['target'], block_number, timestamp))
                 con.commit()
         except Exception as e:
             print('Got exception while fetching powers:', e)
@@ -125,8 +109,10 @@ def get_processed_blocks(con):
     results = con.execute("SELECT * FROM processed_blocks").fetchall()
     return {r[0] for r in results}
 
-def new_connection():
-    con = sqlite3.connect(args.file, timeout=DB_TIMEOUT)
+def new_connection(db_file=None):
+    if db_file is None:
+        db_file = args.file
+    con = sqlite3.connect(db_file, timeout=DB_TIMEOUT)
     con.execute('PRAGMA journal_mode=wal')
     return con
 
@@ -194,7 +180,7 @@ def prep_db(con):
 
     con.execute("CREATE TABLE IF NOT EXISTS PowerStateChanged(farm_id, node_id, state, down_block, block, event_index, timestamp, UNIQUE(event_index, block))")
 
-    con.execute("CREATE TABLE IF NOT EXISTS PowerState(node_id, state, down_block, down_time target, block, timestamp, UNIQUE(node_id, block))")
+    con.execute("CREATE TABLE IF NOT EXISTS PowerState(node_id, state, down_block, down_time, target, block, timestamp, UNIQUE(node_id, block))")
 
     con.execute("CREATE TABLE IF NOT EXISTS processed_blocks(block_number PRIMARY KEY)")
     
@@ -236,6 +222,22 @@ def subscription_callback(block_queue, head, update_nr, subscription_id):
 
 
 if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument('-f', '--file', help='Specify the database file name.', 
+                        type=str, default='tfchain.db')
+    parser.add_argument('-s', '--start',
+                        help='Give a timestamp to start scanning blocks. If ommitted, scanning starts from beginning of current minting period', type=int)
+    parser.add_argument('--start-block',
+                        help='Give a block number to start scanning blocks', type=int)
+    parser.add_argument('-e', '--end',
+                        help='By default, scanning continues to process new blocks as they are generated. When an end timestamp is given, scanning stops at that block height and the program exits', type=int)
+    parser.add_argument('--end-block',
+                        help='Specify end by block number rather than timestamp', type=int)
+    parser.add_argument('-m', '--max-workers',
+                        help='Maximum number of worker processes to spawn', type=int, default=50)
+
+    args = parser.parse_args()
+
     print('Staring up, preparing to ingest some blocks, nom nom')
 
     # Prep database and grab already processed blocks
@@ -250,7 +252,7 @@ if __name__ == '__main__':
 
     if args.start_block:
         start_number = args.start_block
-    elif args.start:  
+    elif args.start:
         start_number = client.find_block_minting(args.start)
     else:
         # By default, use beginning of current minting period
@@ -262,7 +264,7 @@ if __name__ == '__main__':
     writer_proc = Process(target=db_writer, args=[write_queue])
     writer_proc.start()
 
-    powers_thread = Thread(target=fetch_powers, args=[start_number, write_queue])
+    powers_thread = Thread(target=fetch_powers, args=[start_number])
     powers_thread.start()
 
     if args.end or args.end_block:
@@ -361,7 +363,7 @@ if __name__ == '__main__':
             period = minting.Period()
             if period.offset > current_period.offset:
                 start_number = client.find_block_minting(period.start)
-                Thread(target=fetch_powers, args=[start_number, write_queue]).start()
+                Thread(target=fetch_powers, args=[start_number]).start()
                 current_period = period
 
 
