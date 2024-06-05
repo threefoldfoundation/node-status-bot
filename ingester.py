@@ -176,9 +176,15 @@ def prep_db(con):
     # Each event should be uniquely identified by its block and event numbers
     con.execute("CREATE TABLE IF NOT EXISTS NodeUptimeReported(node_id, uptime, timestamp_hint, block, event_index, timestamp, UNIQUE(event_index, block))")
 
+con.execute('CREATE INDEX NodeUptimeReported_node_id_ts ON NodeUptimeReported(node_id, timestamp)')
+
     con.execute("CREATE TABLE IF NOT EXISTS PowerTargetChanged(farm_id, node_id, target, block, event_index, timestamp, UNIQUE(event_index, block))")
 
+    con.execute('CREATE INDEX IF NOT EXISTS PowerTargetChanged_node_id_ts ON PowerTargetChanged(node_id, timestamp)')
+
     con.execute("CREATE TABLE IF NOT EXISTS PowerStateChanged(farm_id, node_id, state, down_block, block, event_index, timestamp, UNIQUE(event_index, block))")
+
+    con.execute('CREATE INDEX IF NOT EXISTS PowerStateChanged_node_id_timestamp ON PowerStateChanged(node_id, timestamp)')
 
     con.execute("CREATE TABLE IF NOT EXISTS PowerState(node_id, state, down_block, down_time, target, block, timestamp, UNIQUE(node_id, block))")
 
