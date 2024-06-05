@@ -5,10 +5,11 @@ This code is essentially a selective port of the v3 minting code, only including
 import sys, sqlite3, collections, time, queue, multiprocessing, logging
 import grid3.minting
 
-
 POST_PERIOD = 60 * 60 * 27
 PERIOD_CATCH = 30
 MAX_BOOT_TIME = 30 * 60
+
+# It turns out that namedtuples might not be the most performant option for how we are using them, but I didn't find a substantial improvement when switching to slotted data classes and these definitions are much more compact :)
 
 NodeUptimeReported = collections.namedtuple('NodeUptimeReported', 'uptime, timestamp, event_index')
 PowerTargetChanged = collections.namedtuple('PowerTargetChanged', 'target, timestamp, event_index')
