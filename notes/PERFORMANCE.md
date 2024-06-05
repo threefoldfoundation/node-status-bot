@@ -5,18 +5,23 @@ These results show the difference between using an index only on node_id, versus
 First some base lines with the non indexed data.
 
 ## No index
+```
 ________________________________________________________
 Executed in   43.47 secs    fish           external
    usr time   34.63 secs    2.15 millis   34.63 secs
    sys time    8.78 secs    0.00 millis    8.78 secs
+```
 
 ### With parallel execution
+```
 ________________________________________________________
 Executed in   12.63 secs    fish           external
    usr time   51.08 secs    0.00 millis   51.08 secs
    sys time   10.88 secs    2.06 millis   10.87 secs
+```
 
 ## Node ID only index
+```
 ________________________________________________________
 Executed in  526.05 millis    fish           external
    usr time  337.50 millis    1.76 millis  335.74 millis
@@ -29,8 +34,10 @@ ________________________________________________________
 Executed in  483.93 millis    fish           external
    usr time  308.84 millis    0.00 micros  308.84 millis
    sys time  173.42 millis  617.00 micros  172.81 millis
+```
 
 ### With parallel execution
+```
 ________________________________________________________
 Executed in  281.45 millis    fish           external
    usr time  597.28 millis    0.00 millis  597.28 millis
@@ -43,13 +50,16 @@ ________________________________________________________
 Executed in  262.10 millis    fish           external
    usr time  604.57 millis  619.00 micros  603.95 millis
    sys time  327.02 millis   76.00 micros  326.95 millis
+```
 
 ### File size increase
-
+```
 278M tfchain.db
 234M tfchain.db.bak
+```
 
 ## Combined index
+```
 ________________________________________________________
 Executed in  318.36 millis    fish           external
    usr time  226.02 millis    0.00 millis  226.02 millis
@@ -62,8 +72,11 @@ ________________________________________________________
 Executed in  301.33 millis    fish           external
    usr time  230.53 millis  563.00 micros  229.97 millis
    sys time   70.05 millis   69.00 micros   69.98 millis
+```
 
 ### With parallel execution
+```
+________________________________________________________
 Executed in  196.26 millis    fish           external
    usr time  396.51 millis    0.00 micros  396.51 millis
    sys time  170.55 millis  763.00 micros  169.78 millis
@@ -75,11 +88,13 @@ ________________________________________________________
 Executed in  195.40 millis    fish           external
    usr time  422.92 millis  627.00 micros  422.29 millis
    sys time  182.60 millis   78.00 micros  182.52 millis
+```
 
 ### File size increase
-
+```
 303M tfchain.db
 234M tfchain.db.bak
+```
 
 # Analysis
 
