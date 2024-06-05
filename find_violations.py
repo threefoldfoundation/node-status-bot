@@ -6,7 +6,7 @@ import sys, sqlite3, collections, time, queue, multiprocessing, logging
 import grid3.minting
 
 
-POST_PERIOD = 60 * 60
+POST_PERIOD = 60 * 60 * 27
 PERIOD_CATCH = 30
 MAX_BOOT_TIME = 30 * 60
 
@@ -21,7 +21,7 @@ def check_node(con, node, period, verbose=False):
     # Checkpoints indicate the last block number and associated timestamp for which all block data has been ingested and processed. We don't want to assume a node has a violation if block processing is behind current time
     checkpoint_time = con.execute("SELECT value FROM kv WHERE key='checkpoint_time'").fetchone()[0]
     
-    # Nodes have 30 minutes to wake up, so we need to check enough uptime events to see if they manage to wake up after the period has ended. One hour should be more than enough time. Minting checks blocks for more than a day after period end though, so we will generate more "never booted" violations versus minting where post period violations will more often have a timestamp
+    # Nodes have 30 minutes to wake up, so we need to check enough uptime events to see if they manage to wake up after the period has ended. Since the boot time and the time of submitting uptime are different events, and the uptime report can come much later, the post period duration is the effective limit on how long a node can spend "booting up" at the end of the period before getting a violation. We (now) use the same value as minting (27 hours) so that we reach the same conclusion as minting about whether to assign a violation or not
     if checkpoint_time > period.end + POST_PERIOD:
         end_time = period.end + POST_PERIOD
     else:
@@ -32,16 +32,16 @@ def check_node(con, node, period, verbose=False):
     states = con.execute('SELECT state, timestamp, event_index FROM PowerStateChanged WHERE node_id=? AND timestamp>=? AND timestamp<=?', (node, period.start, end_time)).fetchall()
 
     # Since we only fetch initial power configs for the beginning of each period, there's no risk of fetching the wrong one unless we're off by a month. On the other hand, getting the exact timestamp of the block or the block number is relatively expensive, so we use a bit of a hack here. Maybe a better approach is caching the period start/end info inside the db
-    initial_power = con.execute('SELECT state, block, target, timestamp FROM PowerState WHERE node_id=? AND timestamp>=?  AND timestamp<=?', [node, (period.start - PERIOD_CATCH), (period.start + PERIOD_CATCH)]).fetchone()
+    initial_power = con.execute('SELECT state, down_time, target, timestamp FROM PowerState WHERE node_id=? AND timestamp>=?  AND timestamp<=?', [node, (period.start - PERIOD_CATCH), (period.start + PERIOD_CATCH)]).fetchone()
 
     # If there's no entry in the db, it would mean either the node was not created yet at this point in time (thus the default value), or the fetching of this data is not completed. The latter case is potentially problematic, but as long as we get the data eventually, we will catch any associated violations eventually too
     if initial_power is None:
         initial_power = 'Up', None, 'Up', None
-    state, down_block, target, timestamp = initial_power
+    state, down_time, target, timestamp = initial_power
 
     if state == 'Down':
-        # Minting actually looks up the time stamp of the block when the node went to sleep. We don't care because that's only needed to calculate the uptime properly, not detect if the node has a violation 
-        power_managed = timestamp
+        # This is now using the same approach as minting (that is, we only care about the actual time the node went to sleep, not when a boot was requested if it happened in the previous minting period). While maybe not immediately obvious, we need the time the node went to sleep here to correctly check if the boot time is greater below
+        power_managed = down_time
         if target == 'Up':
             power_manage_boot = timestamp # Block time of first block in period
         else:
@@ -90,6 +90,7 @@ def check_node(con, node, period, verbose=False):
             print('power_managed:', power_managed, 'power_manage_boot', power_manage_boot)
 
     # There are two scenarios here. First is that we are scanning a completed minting period that ended longer ago than the POST_PERIOD duration. In that case these will be "never booted" violations. The other is that we are scanning an ongoing minting period (or one that ended very recently) and the node has exceeded the allowed 30 minutes. Either way we set the node's boot time to None to signal it is currently unknown. In the second case, it might become known later. Notice too that we only care about wake ups that were initiated before the period ended--those happening after will get checked with the next period
+    # Actually, this is too eager. Minting actually only assigns violations when the node finally wakes up late, or at the end of the period. Nodes can (and do) send their first uptime report after MAX_BOOT_TIME without getting a violation (boot time was in the past). I guess it's up to the caller to decide what to do with "unfinished" violations, though we could differentiate them--assigning the period end + post period timestamp like minting does probably makes sense
     if power_manage_boot and end_time > power_manage_boot + MAX_BOOT_TIME:
         violations.append((power_manage_boot, None))
 
