@@ -1,6 +1,6 @@
 # This script migrates a db produced before commit 5691583f81 to incorporate the change that we also want to store the timestamps of blocks when nodes went to sleep when fetching the initial power states/targets
 
-# TODO: Split this into multiple steps, one to fetch the new data and one to push it into the existing DB. Takes a lot of time to fetch for multiple points, so would mean a lot of downtime with this way
+# It has two separate steps, invoked with "fetch" and "replace". The first one retrieves the new form of data and stores it in an intermediary database. The second one performs the actual replacement into the main database. The fetch command can be used on a running database. Then bring the bot down, run the replace command in this script, and bring up a version of the bot with the new code that works on the new data
 
 import sys, os, sqlite3
 from multiprocessing import Process
@@ -47,3 +47,6 @@ elif command == "replace":
     ingester.prep_db(con)
 
     con.executemany("INSERT INTO PowerState VALUES(?, ?, ?, ?, ?, ?, ?)", connew.execute('SELECT * FROM PowerState').fetchall())
+    con.commit()
+    con.close()
+    connew.close()
