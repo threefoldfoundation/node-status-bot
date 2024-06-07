@@ -103,48 +103,6 @@ def check_node(con, node, period, verbose=False):
 
     return violations
 
-def check_nodes_parallel(db_file, jobs, worker_count):
-    # Each job is a node, period tuple
-    # I tried using a JoinableQueue for the job queue and joining it before fetching the results. This causes, at least in some circumstances, some workers to exit due to the Empty exception before all jobs are in the queue (apparently) and thus one worker gets stuck with the rest of the work
-    job_queue = multiprocessing.Queue()
-    result_queue = multiprocessing.Queue()
-    for job in jobs:
-        job_queue.put(job)
-
-    workers = []
-    for i in range(worker_count):
-        proc = multiprocessing.Process(target=worker_job, args=(db_file, job_queue, result_queue))
-        proc.start()
-        workers.append(proc)
-
-    results = []
-    result_count = 0
-    while result_count < len(jobs):
-        result = result_queue.get()
-        # None means an error in the worker. We don't retry here, but the caller could detect that fewer results are returned than jobs given
-        if result is not None:
-            results.append(result)
-        result_count += 1
-
-    for _ in range(worker_count):
-        job_queue.put(None)
-        
-    return results
-
-def worker_job(db_file, job_queue, result_queue):
-    con = sqlite3.connect(db_file)
-    while 1:
-        try:
-            job = job_queue.get()
-            if job is None:
-                return
-            else:
-                node_id, period = job
-            result_queue.put((node_id, period, check_node(con, node_id, period)))
-        except:
-            logging.exception('Error in violation check worker')
-            result_queue.put(None)
-
 if __name__ == '__main__':
     DB = sys.argv[1]
     NODE = int(sys.argv[2])

@@ -20,8 +20,6 @@ import find_violations
 
 NETWORKS = ['main', 'test', 'dev']
 DEFAULT_PING_TIMEOUT = 10
-# Increasing from 5 to 10 workers on a system with 8 threads only reduced run time by about 1 second
-DB_WORKERS = 5
 
 parser = argparse.ArgumentParser()
 parser.add_argument('token', help='Specify a bot token')
@@ -87,9 +85,7 @@ def check_job(context: CallbackContext):
     """
     The main attraction. This function collects all the node ids that have an active subscription, checks their status, then sends alerts to users whose nodes have a status change.
     """
-    current_period = grid3.minting.Period()
-    last_period = grid3.minting.Period(offset=current_period.offset - 1)
-    periods = (current_period, last_period)
+    con, periods = get_con_and_periods()
 
     for net in NETWORKS:
         # First gather all actively subscribed nodes and note who is subscribed
@@ -103,11 +99,9 @@ def check_job(context: CallbackContext):
 
             if net == 'main':
                 farmerbot_nodes = [n for n in subbed_nodes]
-                results = find_violations.check_nodes_parallel(args.db_file, [(n, p) for n in farmerbot_nodes for p in periods], DB_WORKERS)
                 all_violations = {}
-                for result in results:
-                    # Results are (node_id, period, violations)
-                    all_violations.setdefault(result[0], []).extend(result[2])
+                for node_id in farmerbot_nodes:
+                    all_violations[node_id] = get_violations(con, node_id, periods)
 
         except:
             logging.exception("Error fetching node data for check")
@@ -200,7 +194,7 @@ def format_verticle_list(items):
     return text
 
 def format_violation(violation):
-    requested, booted = violation
+    requested, booted, finalized = violation
     text = ''
     requested = datetime.fromtimestamp(requested)
     text += '<i>Boot requested at:</i>\n'
