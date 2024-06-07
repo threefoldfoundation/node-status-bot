@@ -16,7 +16,8 @@ PowerTargetChanged = collections.namedtuple('PowerTargetChanged', 'target, times
 PowerStateChanged = collections.namedtuple('PowerStateChanged', 'state, timestamp, event_index')
 
 # Nice idea, but the Telegram bot persistence doesn't play well with these
-#Violation = collections.namedtuple('Violation', 'boot_requested, booted_at')
+# This is still a reference for the order of fields in the violation tuples though. See note about how the finalized field is used below
+#Violation = collections.namedtuple('Violation', 'boot_requested, booted_at, finalized')
 
 def check_node(con, node, period, verbose=False):
     # Checkpoints indicate the last block number and associated timestamp for which all block data has been ingested and processed. We don't want to assume a node has a violation if block processing is behind current time
@@ -25,8 +26,10 @@ def check_node(con, node, period, verbose=False):
     # Nodes have 30 minutes to wake up, so we need to check enough uptime events to see if they manage to wake up after the period has ended. Since the boot time and the time of submitting uptime are different events, and the uptime report can come much later, the post period duration is the effective limit on how long a node can spend "booting up" at the end of the period before getting a violation. We (now) use the same value as minting (27 hours) so that we reach the same conclusion as minting about whether to assign a violation or not
     if checkpoint_time > period.end + POST_PERIOD:
         end_time = period.end + POST_PERIOD
+        period_finished = True
     else:
         end_time = checkpoint_time
+        period_finished = False
 
     uptimes = con.execute('SELECT uptime, timestamp, event_index FROM NodeUptimeReported WHERE node_id=? AND timestamp>=?  AND timestamp<=?', (node, period.start, end_time)).fetchall()
     targets = con.execute('SELECT target, timestamp, event_index FROM PowerTargetChanged WHERE node_id=? AND timestamp>=?  AND timestamp<=?', (node, period.start, end_time)).fetchall()
@@ -71,7 +74,7 @@ def check_node(con, node, period, verbose=False):
                     if boot_time > power_manage_boot + MAX_BOOT_TIME:
                         if verbose:
                             print('About to return a violation for this uptime event:', event)
-                        violations.append((power_manage_boot, boot_time))
+                        violations.append((power_manage_boot, boot_time, True))
                     
                     power_managed = None
                     power_manage_boot = None
@@ -90,10 +93,13 @@ def check_node(con, node, period, verbose=False):
         if verbose:
             print('power_managed:', power_managed, 'power_manage_boot', power_manage_boot)
 
-    # There are two scenarios here. First is that we are scanning a completed minting period that ended longer ago than the POST_PERIOD duration. In that case these will be "never booted" violations. The other is that we are scanning an ongoing minting period (or one that ended very recently) and the node has exceeded the allowed 30 minutes. Either way we set the node's boot time to None to signal it is currently unknown. In the second case, it might become known later. Notice too that we only care about wake ups that were initiated before the period ended--those happening after will get checked with the next period
-    # Actually, this is too eager. Minting actually only assigns violations when the node finally wakes up late, or at the end of the period. Nodes can (and do) send their first uptime report after MAX_BOOT_TIME without getting a violation (boot time was in the past). I guess it's up to the caller to decide what to do with "unfinished" violations, though we could differentiate them--assigning the period end + post period timestamp like minting does probably makes sense
+    # There are two scenarios here. First is that we are scanning a completed minting period that ended longer ago than the POST_PERIOD duration. In that case these will be "never booted" violations. The other is that we are scanning an ongoing minting period (or one that ended very recently) and the node has exceeded the allowed 30 minutes. The tricky part here is that tecnically the node has not actually received a violation until it wakes up or the post period time has elapsed. Due to how the boot time is calculated, it will always be some amount of time before the uptime report that signals the wake up. Therefore we can only say that there's a possibility (with increasing probability as time goes on) that node will be assigned a violation after 30 minutes have passed from it's boot requested time
+    # Thus there's the third field on the tuple, representing whether the violation is finalized. Experience shows that a bit longer than five minutes is a typical duration for how long the kernel uptime counter is running before the node submits a first uptime report. Within ten minutes there's a high chance the node has a violation. Anyway, we just report the facts here and leave that judgement call for elsewhere
     if power_manage_boot and end_time > power_manage_boot + MAX_BOOT_TIME:
-        violations.append((power_manage_boot, None))
+        if period_finished:
+            violations.append((power_manage_boot, None, True))
+        else:
+            violations.append((power_manage_boot, None, False))
 
     return violations
 
