@@ -98,7 +98,7 @@ Executed in  195.40 millis    fish           external
 
 # Analysis
 
-Using the combined index improves execution speed by about 60% over indexing only the node id. Versus the non indexed database file, the combined index increases the size by about 30% while the node id only index increases the size by about 20%.
+Using the combined index improves execution speed by about 40% over indexing only the node id. Versus the non indexed database file, the combined index increases the size by about 30% while the node id only index increases the size by about 20%.
 
 The benefits of parallel execution are almost entirely lost with the indexed database, offering only a modest 33% increase in overall speed while bringing total overhead above the cost of serial execution.
 
