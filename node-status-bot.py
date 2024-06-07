@@ -402,26 +402,34 @@ def start(update: Update, context: CallbackContext):
     chat_id = update.effective_chat.id
     context.bot_data['chats'].setdefault(chat_id, new_user())
     msg = '''
-Hey there, I'm the ThreeFold Grid 3 node status bot. Beep boop.
+Hey there, 
+
+I'm the ThreeFold node status bot. Beep boop.
 
 I can give you information about whether a node is up or down right now (/status) and also notify you if its state changes in the future (/subscribe). 
 
 Here are all the commands I support:
 
-/status - check the current status of one node. This is based on Grid proxy and should match what's reported by the explorer which updates relatively slowly.
+/help - print this message again.
+
+/status - check the current status of one node. This uses a similar method as the Dashboard for determining node status, and update may be delayed by an hour. With no input, a status report will be generated for all subscribed nodes, if any.
 Example: /status 1
 
-/subscribe (/sub) - subscribe to updates about one or more nodes. If you don't provide an input, the nodes you are currently subscribed to will be shown. 
+/violations - scan for farmerbot related violations during the current and previous minting periods. Like status, this works on all subscribed nodes when no input is given.
+
+/subscribe - subscribe to updates about one or more nodes. If you don't provide an input, the nodes you are currently subscribed to will be shown. 
 Example: /sub 1 2 3
 
-/unsubscribe (/unsub) - unsubscribe from updates about one or more nodes. If you don't give an input, you'll be unsubscribed from all updates.
+/unsubscribe - unsubscribe from updates about one or more nodes. To unsubscribe from all node and thus stop all alerts, write "/unsubscribe all"
 
-/network (/net) - change the network to "dev", "test", or "main" (default is main). If you don't provide an input, the currently selected network is shown. 
+/network - change the network to "dev", "test", or "main" (default is main). If you don't provide an input, the currently selected network is shown. 
 Example: /network main
 
 To report bugs, request features, or just say hi, please contact @scottyeager. Please also subscribe to the updates channel here for news on the bot: t.me/node_bot_updates
 
-This bot is experimental and probably has bugs. Only you are responsible for your node's uptime and your farming rewards.
+You can find the bot's source code on GitHub: github.com/threefoldfoundation/node-status-bot
+
+This bot is developed and operated on a best effort basis. Only you are responsible for your node's uptime and your farming rewards.
     '''
     send_message(context, chat_id, text=msg)
 
@@ -671,7 +679,7 @@ def violations(update: Update, context: CallbackContext):
         if text:
             send_message(context, chat_id, text=text)
         else:
-            send_message(context, chat_id, text='No violations found')
+            send_message(context, chat_id, text='No violations found for node{}'.format(format_list(farmerbot_node_ids)))
 
 # Anyone commands
 dispatcher.add_handler(CommandHandler('chat_id', check_chat))
@@ -689,12 +697,12 @@ dispatcher.add_handler(CommandHandler('unsub', unsubscribe))
 dispatcher.add_handler(CommandHandler('violations', violations))
 
 updater.bot.delete_my_commands()
-updater.bot.set_my_commands([    
+updater.bot.set_my_commands([   
+    ('help', 'Show more details on commands and example usage.'), 
     ('status', 'Get current status of nodes. With no input, show status for all subscribed nodes.'),
+    ('violations', 'Check if node has any farmerbot violations. With no input, shows a report for subscribed nodes.'),
     ('subscribe', 'Start alerts for one or more nodes. With no input, shows currently subscribed nodes.'),
     ('unsubscribe', 'Stop alerts for one or more nodes. Use "/unsubscribe all" to stop all alerts.'),
-    ('violations', 'Check if node has any farmerbot violations. With no input, shows a report for subscribed nodes.'),
-    ('help', 'Show more details on commands and example usage.'),
     ('network', 'Change the network to "dev", "test", or "main"')
     ])
 
