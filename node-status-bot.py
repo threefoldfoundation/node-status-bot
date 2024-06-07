@@ -31,8 +31,6 @@ parser.add_argument('-v', '--verbose', help='Verbose output',
                     action="store_true")
 parser.add_argument('-p', '--poll', help='Set polling frequency in seconds', 
                     type=int, default=60)
-parser.add_argument('-l', '--logs', 
-                    help='Specify how many lines the log file must grow before a notification is sent to the admin', type=int, default=10)
 parser.add_argument('-a', '--admin', help='Set the admin chat id', type=int)
 parser.add_argument('-t', '--test', help='Enable test feature', 
                     action="store_true")
@@ -341,7 +339,6 @@ def network(update: Update, context: CallbackContext):
 
 def new_user():
     return {'net': 'main', 'nodes': {'main': [], 'test': [], 'dev': []}}
-
 
 def node_used_farmerbot(con, node_id):
     # Check if the node ever went standby, which is a requirement for it to receive a violation
@@ -674,35 +671,6 @@ def violations(update: Update, context: CallbackContext):
         else:
             send_message(context, chat_id, text='No violations found')
 
-def send_logs(update: Update, context: CallbackContext):
-    if update.effective_chat.id != args.admin:
-        return
-
-    if context.args:
-        lines = context.args[0]
-    else:
-        lines = 50
-
-    with open('logs', 'r') as logs:
-        log_lines = [line for line in logs]
-        text = ''
-        for line in log_lines:
-            text += line
-        if text:
-            send_message(context, args.admin, text=text)
-        else:
-            send_message(context, args.admin, text='Log file empty')
-
-def log_job(context: CallbackContext):
-    with open('logs', 'r') as logs:
-        log_length = sum(1 for line in logs)
-
-    last_length = context.bot_data.setdefault('last_log_length', log_length)
-
-    if log_length - last_length > args.logs and args.admin:
-        send_message(context, args.admin, text='Log file has grown by {} lines. Houston, we have a ...?'.format(args.logs))
-
-
 # Anyone commands
 dispatcher.add_handler(CommandHandler('chat_id', check_chat))
 dispatcher.add_handler(CommandHandler('network', network))
@@ -717,9 +685,6 @@ dispatcher.add_handler(CommandHandler('unsubscribe', unsubscribe))
 dispatcher.add_handler(CommandHandler('unsub', unsubscribe))
 dispatcher.add_handler(CommandHandler('violations', violations))
 
-# Admin commands
-dispatcher.add_handler(CommandHandler('logs', send_logs))
-
 if args.test:
     import json
     get_nodes = get_nodes_from_file
@@ -733,7 +698,6 @@ initialize(dispatcher.bot_data)
 migrate_data(dispatcher.bot_data)
 populate_violations(dispatcher.bot_data)
 updater.job_queue.run_repeating(check_job, interval=args.poll, first=1)
-updater.job_queue.run_repeating(log_job, interval=3600, first=0)
 
 updater.start_polling()
 updater.idle()
