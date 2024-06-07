@@ -404,10 +404,9 @@ def start(update: Update, context: CallbackContext):
     msg = '''
 Hey there, I'm the ThreeFold Grid 3 node status bot. Beep boop.
 
-I can give you information about whether a node is up or down right now and also notify you if its state changes in the future. Here are the commands I support:
+I can give you information about whether a node is up or down right now (/status) and also notify you if its state changes in the future (/subscribe). 
 
-/network (/net) - change the network to "dev", "test", or "main" (default is main). If you don't provide an input, the currently selected network is shown. 
-Example: /network main
+Here are all the commands I support:
 
 /status - check the current status of one node. This is based on Grid proxy and should match what's reported by the explorer which updates relatively slowly.
 Example: /status 1
@@ -416,6 +415,9 @@ Example: /status 1
 Example: /sub 1 2 3
 
 /unsubscribe (/unsub) - unsubscribe from updates about one or more nodes. If you don't give an input, you'll be unsubscribed from all updates.
+
+/network (/net) - change the network to "dev", "test", or "main" (default is main). If you don't provide an input, the currently selected network is shown. 
+Example: /network main
 
 To report bugs, request features, or just say hi, please contact @scottyeager. Please also subscribe to the updates channel here for news on the bot: t.me/node_bot_updates
 
@@ -677,6 +679,7 @@ dispatcher.add_handler(CommandHandler('network', network))
 dispatcher.add_handler(CommandHandler('net', network))
 dispatcher.add_handler(CommandHandler('ping', status_ping))
 dispatcher.add_handler(CommandHandler('start', start))
+dispatcher.add_handler(CommandHandler('help', start))
 dispatcher.add_handler(CommandHandler('status', status_gql))
 dispatcher.add_handler(CommandHandler('subscribe', subscribe))
 dispatcher.add_handler(CommandHandler('sub', subscribe))
@@ -684,6 +687,16 @@ dispatcher.add_handler(CommandHandler('timeout', timeout))
 dispatcher.add_handler(CommandHandler('unsubscribe', unsubscribe))
 dispatcher.add_handler(CommandHandler('unsub', unsubscribe))
 dispatcher.add_handler(CommandHandler('violations', violations))
+
+updater.bot.delete_my_commands()
+updater.bot.set_my_commands([    
+    ('status', 'Get current status of nodes. With no input, show status for all subscribed nodes.'),
+    ('subscribe', 'Start alerts for one or more nodes. With no input, shows currently subscribed nodes.'),
+    ('unsubscribe', 'Stop alerts for one or more nodes. Use "/unsubscribe all" to stop all alerts.'),
+    ('violations', 'Check if node has any farmerbot violations. With no input, shows a report for subscribed nodes.'),
+    ('help', 'Show more details on commands and example usage.'),
+    ('network', 'Change the network to "dev", "test", or "main"')
+    ])
 
 if args.test:
     import json
