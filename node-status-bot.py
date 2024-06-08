@@ -379,7 +379,7 @@ def populate_violations(bot_data):
     for node_id, node in nodes.items():
         violations = get_violations(con, node_id, periods)
         # Violations are uniquely identified per node by their first field (time that wake up was initiated). Storing them in this form helps to easily identify new violations later
-        node.violations =  {v[0]: v for v in violations}
+        node.violations =  {v.boot_requested: v for v in violations}
         if violations or node.status == 'standby':
             node.farmerbot = True
         else:
