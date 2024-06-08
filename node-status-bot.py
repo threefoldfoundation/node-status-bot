@@ -202,11 +202,11 @@ def format_violation(violation):
     text = ''
     requested = datetime.fromtimestamp(violation.boot_requested)
     text += '<i>Boot requested at:</i>\n'
-    text += '{} UTC\n'.format(violation.boot_requested)
+    text += '{} UTC\n'.format(requested)
     if violation.booted_at:
         booted = datetime.fromtimestamp(violation.booted_at)
         text += '<i>Node booted at:</i>\n'
-        text += '{} UTC\n'.format(violation.booted_at)
+        text += '{} UTC\n'.format(booted)
     else:
         text += 'Node has not booted\n'
     return text
