@@ -20,6 +20,7 @@ import find_violations
 
 NETWORKS = ['main', 'test', 'dev']
 DEFAULT_PING_TIMEOUT = 10
+BOOT_TOLERANCE = 60 * 40
 
 parser = argparse.ArgumentParser()
 parser.add_argument('token', help='Specify a bot token')
@@ -131,19 +132,23 @@ def check_job(context: CallbackContext):
                     for chat_id in subbed_nodes[node.nodeId]:
                         send_message(context, chat_id, text='Node {} has come online \N{electric light bulb}'.format(node.nodeId))
 
-                # We track which nodes have ever been managed by farmerbot, since those are the only ones that can get violations and scanning for violations is a fairly expensive operation
+                # We track which nodes have ever been managed by farmerbot, since those are the only ones that can get violations and scanning for violations is a relatively expensive operation
                 if node.status == 'standby' or update.status == 'standby':
                     node.farmerbot = True
 
                 if node.nodeId in all_violations:
                     violations = all_violations[node.nodeId]
                     for v in violations:
-                        if v[0] not in node.violations:
-                            for chat_id in subbed_nodes[node.nodeId]:
-                                send_message(context, chat_id, text='🚨 Farmerbot violation detected for node {}. Node failed to boot within 30 minutes 🚨\n\n{}'.format(node.nodeId, format_violation(v)))
+                        if v.boot_requested not in node.violations: 
+                            if v.finalized:
+                                for chat_id in subbed_nodes[node.nodeId]:
+                                    send_message(context, chat_id, text='🚨 Farmerbot violation detected for node {}. Node failed to boot within 30 minutes 🚨\n\n{}'.format(node.nodeId, format_violation(v)))
+                            elif v.end_time - v.boot_requested > BOOT_TOLERANCE:
+                                for chat_id in subbed_nodes[node.nodeId]:
+                                    send_message(context, chat_id, text='🚨 Probable farmerbot violation detected for node {}. Node appears to have not booted within 30 minutes. Check again with /violation after node boots 🚨\n\n{}'.format(node.nodeId, format_violation(v)))
                         
                         # We do this every time because information about when a node finally booted might become available later. Right now we don't use this info though. Might be effective as a cache for manual violation lookups
-                        node.violations[v[0]] = v
+                        node.violations[v.boot_requested] = v
 
             except:
                 logging.exception("Error in alert block")
@@ -194,27 +199,26 @@ def format_verticle_list(items):
     return text
 
 def format_violation(violation):
-    requested, booted, finalized = violation
     text = ''
-    requested = datetime.fromtimestamp(requested)
+    requested = datetime.fromtimestamp(violation.boot_requested)
     text += '<i>Boot requested at:</i>\n'
-    text += '{} UTC\n'.format(requested)
-    if booted:
-        booted = datetime.fromtimestamp(booted)
+    text += '{} UTC\n'.format(violation.boot_requested)
+    if violation.booted_at:
+        booted = datetime.fromtimestamp(violation.booted_at)
         text += '<i>Node booted at:</i>\n'
-        text += '{} UTC\n'.format(booted)
+        text += '{} UTC\n'.format(violation.booted_at)
     else:
         text += 'Node has not booted\n'
     return text
 
 def format_violations(node_id, violations):
     text = '<b><u>Violations for node {}:</u></b>\n\n'.format(node_id)
-    for requested, booted in violations:
-        requested = datetime.fromtimestamp(requested)
+    for violation in violations:
+        requested = datetime.fromtimestamp(violation.boot_requested)
         text += '<i>Boot requested at:</i>\n'
         text += '{} UTC\n'.format(requested)
-        if booted:
-            booted = datetime.fromtimestamp(booted)
+        if violation.booted_at:
+            booted = datetime.fromtimestamp(violation.booted_at)
             text += '<i>Node booted at:</i>\n'
             text += '{} UTC\n'.format(booted)
         else:
@@ -552,7 +556,7 @@ def subscribe(update: Update, context: CallbackContext):
                 for node_id in unknown_nodes:
                     if node_used_farmerbot(con, node_id):
                         violations = get_violations(con, node_id, periods)
-                        new_nodes[node_id].violations = {v[0]: v for v in violations}
+                        new_nodes[node_id].violations = {v.boot_requested: v for v in violations}
                     
             known_nodes.update(new_nodes)
             # Do this to preserve the order since gql does not

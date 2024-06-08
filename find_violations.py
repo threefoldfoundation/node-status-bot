@@ -3,11 +3,12 @@ This code is essentially a selective port of the v3 minting code, only including
 """
 
 import sys, sqlite3, collections, time, queue, multiprocessing, logging
+from dataclasses import dataclass
 import grid3.minting
 
 POST_PERIOD = 60 * 60 * 27
 PERIOD_CATCH = 30
-MAX_BOOT_TIME = 30 * 60
+MAX_BOOT_TIME = 60 * 30
 
 # It turns out that namedtuples might not be the most performant option for how we are using them, but I didn't find a substantial improvement when switching to slotted data classes and these definitions are much more compact :)
 
@@ -15,9 +16,14 @@ NodeUptimeReported = collections.namedtuple('NodeUptimeReported', 'uptime, times
 PowerTargetChanged = collections.namedtuple('PowerTargetChanged', 'target, timestamp, event_index')
 PowerStateChanged = collections.namedtuple('PowerStateChanged', 'state, timestamp, event_index')
 
-# Nice idea, but the Telegram bot persistence doesn't play well with these
-# This is still a reference for the order of fields in the violation tuples though. See note about how the finalized field is used below
-#Violation = collections.namedtuple('Violation', 'boot_requested, booted_at, finalized')
+# Since Telegram bot's pickle persistence doesn't play nice with namedtuples, we use a slotted data class here instead. Technically this class represents both actual violations and possible violations. In the second case, finalized is set to false. Including the end time of the period we have checked allows for comparing the boot_requested time with the amount of time that has elapsed (in terms of the timestamps of tfchain blocks we've actually processed) to decide how likely it is that a violation has actually occurred
+@dataclass
+class Violation:
+    __slots__ = 'boot_requested', 'booted_at', 'finalized', 'end_time'
+    boot_requested: int
+    booted_at: int
+    finalized: bool
+    end_time: int
 
 def check_node(con, node, period, verbose=False):
     # Checkpoints indicate the last block number and associated timestamp for which all block data has been ingested and processed. We don't want to assume a node has a violation if block processing is behind current time
@@ -74,13 +80,14 @@ def check_node(con, node, period, verbose=False):
                     if boot_time > power_manage_boot + MAX_BOOT_TIME:
                         if verbose:
                             print('About to return a violation for this uptime event:', event)
-                        violations.append((power_manage_boot, boot_time, True))
+                        violations.append(Violation(power_manage_boot, boot_time, True, None))
                     
                     power_managed = None
                     power_manage_boot = None
 
         elif type(event) is PowerTargetChanged:
-            if event.target == 'Up' and state == 'Down' and power_manage_boot is None:
+            # We don't want to check boots requested during the post period. Those will get checked during the next cycle
+            if event.target == 'Up' and state == 'Down' and power_manage_boot is None and event.timestamp < period.end:
                 power_manage_boot = event.timestamp
             target = event.target
 
@@ -93,13 +100,10 @@ def check_node(con, node, period, verbose=False):
         if verbose:
             print('power_managed:', power_managed, 'power_manage_boot', power_manage_boot)
 
-    # There are two scenarios here. First is that we are scanning a completed minting period that ended longer ago than the POST_PERIOD duration. In that case these will be "never booted" violations. The other is that we are scanning an ongoing minting period (or one that ended very recently) and the node has exceeded the allowed 30 minutes. The tricky part here is that tecnically the node has not actually received a violation until it wakes up or the post period time has elapsed. Due to how the boot time is calculated, it will always be some amount of time before the uptime report that signals the wake up. Therefore we can only say that there's a possibility (with increasing probability as time goes on) that node will be assigned a violation after 30 minutes have passed from it's boot requested time
-    # Thus there's the third field on the tuple, representing whether the violation is finalized. Experience shows that a bit longer than five minutes is a typical duration for how long the kernel uptime counter is running before the node submits a first uptime report. Within ten minutes there's a high chance the node has a violation. Anyway, we just report the facts here and leave that judgement call for elsewhere
+    # There are two scenarios here. First is that we are scanning a completed minting period that ended longer ago than the POST_PERIOD duration. In that case these will be "never booted" violations. The other is that we are scanning an ongoing minting period (or one that ended very recently) and the MAX_BOOT_TIME has elapsed. In the second case we don't actually know if a violation will happen for the node, because boot time is timestamp - uptime. So if the node's uptime counter is already running and it successfully submits an uptime report later, then no violation happens. We mark these as unfinalized
     if power_manage_boot and end_time > power_manage_boot + MAX_BOOT_TIME:
-        if period_finished:
-            violations.append((power_manage_boot, None, True))
-        else:
-            violations.append((power_manage_boot, None, False))
+        finalized = period_finished
+        violations.append(Violation(power_manage_boot, None, finalized, end_time))
 
     return violations
 
