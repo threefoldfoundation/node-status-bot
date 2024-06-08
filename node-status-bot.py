@@ -145,7 +145,7 @@ def check_job(context: CallbackContext):
                                     send_message(context, chat_id, text='🚨 Farmerbot violation detected for node {}. Node failed to boot within 30 minutes 🚨\n\n{}'.format(node.nodeId, format_violation(v)))
                             elif v.end_time - v.boot_requested > BOOT_TOLERANCE:
                                 for chat_id in subbed_nodes[node.nodeId]:
-                                    send_message(context, chat_id, text='🚨 Probable farmerbot violation detected for node {}. Node appears to have not booted within 30 minutes. Check again with /violation after node boots 🚨\n\n{}'.format(node.nodeId, format_violation(v)))
+                                    send_message(context, chat_id, text='🚨 Probable farmerbot violation detected for node {}. Node appears to have not booted within 30 minutes of boot request. Check again with /violations after node boots 🚨\n\n{}'.format(node.nodeId, format_violation(v)))
                         
                         # We do this every time because information about when a node finally booted might become available later. Right now we don't use this info though. Might be effective as a cache for manual violation lookups
                         node.violations[v.boot_requested] = v
@@ -644,6 +644,7 @@ def violations(update: Update, context: CallbackContext):
         try:
             for arg in context.args:
                 node_ids.append(int(arg))
+            using_subs = False
         except ValueError:
             send_message(context, chat_id, text='There was a problem processing your input. This command accepts one or more node ids separated by a space.')
             return
@@ -655,6 +656,7 @@ def violations(update: Update, context: CallbackContext):
             return
         else:
             node_ids = subbed_nodes
+            using_subs = True
 
     farmerbot_node_ids = []
     for node_id in node_ids:
@@ -667,7 +669,11 @@ def violations(update: Update, context: CallbackContext):
         send_message(context, chat_id, text='None of the nodes to check appear to have used the farmerbot.')
         return
     else:
-        send_message(context, chat_id, text='Checking for violations...')
+        if using_subs:
+            send_message(context, chat_id, text='Checking for violations...')
+        else:
+            send_message(context, chat_id, text='Checking node{} for violations...'.format(format_list(farmerbot_node_ids)))
+
         current_period = grid3.minting.Period()
         text = ''
         for node_id in farmerbot_node_ids:
@@ -677,7 +683,7 @@ def violations(update: Update, context: CallbackContext):
         if text:
             send_message(context, chat_id, text=text)
         else:
-            send_message(context, chat_id, text='No violations found for node{}'.format(format_list(farmerbot_node_ids)))
+            send_message(context, chat_id, text='No violations found')
 
 # Anyone commands
 dispatcher.add_handler(CommandHandler('chat_id', check_chat))
