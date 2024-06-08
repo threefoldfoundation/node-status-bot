@@ -413,7 +413,7 @@ Here are all the commands I support:
 /status - check the current status of one node. This uses a similar method as the Dashboard for determining node status, and update may be delayed by an hour. With no input, a status report will be generated for all subscribed nodes, if any.
 Example: /status 1
 
-/violations - scan for farmerbot related violations during the current and previous minting periods. Like status, this works on all subscribed nodes when no input is given.
+/violations - scan for farmerbot related violations during the current minting period. Like status, this works on all subscribed nodes when no input is given.
 
 /subscribe - subscribe to updates about one or more nodes. If you don't provide an input, the nodes you are currently subscribed to will be shown. 
 Example: /sub 1 2 3
