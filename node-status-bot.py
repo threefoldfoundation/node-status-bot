@@ -380,9 +380,13 @@ def populate_violations(bot_data):
         violations = get_violations(con, node_id, periods)
         # Violations are uniquely identified per node by their first field (time that wake up was initiated). Storing them in this form helps to easily identify new violations later
         node.violations =  {v.boot_requested: v for v in violations}
-        if violations or node.status == 'standby':
-            node.farmerbot = True
-        else:
+        try:
+            if violations or node.status == 'standby':
+                node.farmerbot = True
+            else:
+                node.farmerbot = False
+        # It's possible when migrating from old style bot data that some node objects don't have a status field
+        except AttributeError:
             node.farmerbot = False
 
     bot_data['violations_populated'] = True
