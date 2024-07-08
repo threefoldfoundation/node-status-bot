@@ -212,7 +212,7 @@ def scale_workers(processes, block_queue, write_queue):
         for i in range(args.max_workers - len(processes)):
             processes.append(spawn_worker(block_queue, write_queue))
 
-def spawn_subsriber(block_queue, client):
+def spawn_subscriber(block_queue, client):
     callback = functools.partial(subscription_callback, block_queue)
     sub_thread = Thread(target=client.sub.subscribe_block_headers, args=[callback])
     sub_thread.start()
@@ -232,7 +232,7 @@ if __name__ == '__main__':
     parser.add_argument('-f', '--file', help='Specify the database file name.', 
                         type=str, default='tfchain.db')
     parser.add_argument('-s', '--start',
-                        help='Give a timestamp to start scanning blocks. If ommitted, scanning starts from beginning of current minting period', type=int)
+                        help='Give a timestamp to start scanning blocks. If omitted, scanning starts from beginning of current minting period', type=int)
     parser.add_argument('--start-block',
                         help='Give a block number to start scanning blocks', type=int)
     parser.add_argument('-e', '--end',
@@ -308,7 +308,7 @@ if __name__ == '__main__':
         # This is the case where we continue running and fetch all new blocks as they are generated
 
         # Since using the subscribe method blocks, we give it a thread
-        sub_thread = spawn_subsriber(block_queue, client)
+        sub_thread = spawn_subscriber(block_queue, client)
 
         # We wait to get the first block number back from the subscribe callback, so that we're sure which block is the end of the historic range we want to queue up
         block_number = block_queue.get()
@@ -337,7 +337,7 @@ if __name__ == '__main__':
             processed_count = new_count
 
             # Check for missing blocks only when the queue is cleared, to avoid placing duplicate entries in the queue. In theory it's possible the queue never empties due to bad conditions, but in practice the resting state is an empty block queue
-            # We record the max block for which we have processed all preceeding blocks as a "checkpoint" and also the timestamp. This helps keep this computation in check as the size of processed blocks grows. We'll also use the checkpoint timestamps when searching for violations, to see if block processing has fallen behind
+            # We record the max block for which we have processed all preceding blocks as a "checkpoint" and also the timestamp. This helps keep this computation in check as the size of processed blocks grows. We'll also use the checkpoint timestamps when searching for violations, to see if block processing has fallen behind
             if block_queue.qsize() == 0:
                 first_block = con.execute("SELECT value FROM kv WHERE key='checkpoint_block'").fetchone()[0]
                 print('Block checkpoint is:', first_block)
@@ -362,7 +362,6 @@ if __name__ == '__main__':
                         con.execute("UPDATE kv SET value=? WHERE key='checkpoint_block'", (last_block,))
                         con.execute("UPDATE kv SET value=? WHERE key='checkpoint_time'", (timestamp,))
 
-
             scale_workers(processes, block_queue, write_queue)
 
             # If we have entered a new minting period, spawn a thread to fetch the power info for each node at the start of the new period
@@ -372,10 +371,12 @@ if __name__ == '__main__':
                 Thread(target=fetch_powers, args=[start_number]).start()
                 current_period = period
 
-
             # Also make sure we keep alive our subscription thread. If there's an error in the callback, it propagates up and the thread dies
             if not sub_thread.is_alive():
                 print("Subscription thread died, respawning it")
-                sub_thread = spawn_subsriber(block_queue, client)
+                sub_thread = spawn_subscriber(block_queue, client)
 
-            #TODO: we should also check and respawn the writer process if needed
+            if not writer_proc.is_alive():
+                print("Writer proc died, respawning it")
+                writer_proc = Process(target=db_writer, args=[write_queue])
+                writer_proc.start()
