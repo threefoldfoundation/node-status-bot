@@ -12,6 +12,7 @@ import sqlite3, datetime, time, logging, functools, argparse
 from threading import Thread
 from multiprocessing import Process, JoinableQueue
 from websocket._exceptions import WebSocketConnectionClosedException
+import prometheus_client
 import grid3.network
 from grid3 import tfchain, minting
 
@@ -307,6 +308,13 @@ if __name__ == '__main__':
     else:
         # This is the case where we continue running and fetch all new blocks as they are generated
 
+        # Prep Prometheus instrumentation. We only use this in long running mode
+        prometheus_client.start_http_server(8000)
+        blocks_counter = prometheus_client.Counter('blocks_processed', 'Counts how many blocks have processed successfully')
+        blocks_gauge = prometheus_client.Gauge('block_number', 'Highest block number processed so far')
+        block_queue_gauge = prometheus_client.Gauge('block_queue_length', 'How many blocks are queued to be processed')
+        write_queue_gauge = prometheus_client.Gauge('write_queue_length', 'Current number of items in write queue')
+
         # Since using the subscribe method blocks, we give it a thread
         sub_thread = spawn_subscriber(block_queue, client)
 
@@ -333,8 +341,14 @@ if __name__ == '__main__':
             # We just discard any processes that have died for any reason. They will be replaced by the auto scaling. In fact, we don't try to handle errors at all in the worker processes--the blocks just get retried later
             processes = [t for t in processes if t.is_alive()]
             new_count = con.execute('SELECT COUNT(1) FROM processed_blocks').fetchone()[0]
-            print('{} processed {} blocks in {} seconds {} blocks queued {} processes alive {} write jobs'.format(datetime.datetime.now(), new_count - processed_count, SLEEP_TIME, block_queue.qsize(), len(processes), write_queue.qsize()))
+            processed_this_period = new_count - processed_count
+            print('{} processed {} blocks in {} seconds {} blocks queued {} processes alive {} write jobs'.format(datetime.datetime.now(), processed_this_period, SLEEP_TIME, block_queue.qsize(), len(processes), write_queue.qsize()))
             processed_count = new_count
+
+            blocks_counter.inc(processed_this_period)
+            write_queue_gauge.set(write_queue.qsize())
+            block_queue_gauge.set(block_queue.qsize())
+            blocks_gauge.set(con.execute('SELECT MAX(block_number) FROM processed_blocks').fetchone()[0])
 
             # Check for missing blocks only when the queue is cleared, to avoid placing duplicate entries in the queue. In theory it's possible the queue never empties due to bad conditions, but in practice the resting state is an empty block queue
             # We record the max block for which we have processed all preceding blocks as a "checkpoint" and also the timestamp. This helps keep this computation in check as the size of processed blocks grows. We'll also use the checkpoint timestamps when searching for violations, to see if block processing has fallen behind
