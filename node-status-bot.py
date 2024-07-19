@@ -183,21 +183,21 @@ def format_nodes(up, down, standby):
 
     if up:
         text += '<b><u>Up nodes:</u></b>\n'
-        text += format_verticle_list(up)
+        text += format_vertical_list(up)
     if down:
         if up:
             text += '\n'
         text += '<b><u>Down nodes:</u></b>\n'
-        text += format_verticle_list(down)
+        text += format_vertical_list(down)
     if standby:
         if up or down:
             text += '\n'
         text += '<b><u>Standby nodes:</u></b>\n'
-        text += format_verticle_list(standby)
+        text += format_vertical_list(standby)
 
     return text
 
-def format_verticle_list(items):
+def format_vertical_list(items):
     text = ''
     for item in items:
         text += str(item) + '\n'
@@ -541,14 +541,14 @@ def status_ping(update: Update, context: CallbackContext):
             msg = ''
             if up_nodes:
                 msg += '<b><u>Responsive nodes:</u></b>\n'
-                msg += format_verticle_list([node.nodeId for node in up_nodes])
+                msg += format_vertical_list([node.nodeId for node in up_nodes])
 
             if len(up_nodes) < len(nodes):
                 rest = [node.nodeId for node in nodes if node not in up_nodes]
                 if up_nodes:
                     msg += '\n'
                 msg += '<b><u>Unresponsive nodes:</u></b>\n'
-                msg += format_verticle_list(rest)
+                msg += format_vertical_list(rest)
 
             send_message(context, chat_id, text=msg)
 
