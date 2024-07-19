@@ -423,8 +423,8 @@ def split_message(text):
             message = chunk + splitter
         else:
             message += chunk + splitter
-    if message:
-        messages.append(message.rstrip(splitter))
+    messages.append(message.rstrip(splitter))
+
     return messages
 
 def start(update: Update, context: CallbackContext):
