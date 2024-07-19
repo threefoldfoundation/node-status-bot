@@ -129,7 +129,7 @@ def check_node(con, node, period, verbose=False):
             state = event.state
 
         if verbose:
-            print('power_managed:', power_managed, 'power_manage_boot', power_manage_boot)
+            print('power_managed:', power_managed, 'power_manage_boot:', power_manage_boot)
 
     # There are two scenarios here. First is that we are scanning a completed minting period that ended longer ago than the POST_PERIOD duration. In that case these will be "never booted" violations. The other is that we are scanning an ongoing minting period (or one that ended very recently) and the MAX_BOOT_TIME has elapsed. In the second case we don't actually know if a violation will happen for the node, because boot time is timestamp - uptime. So if the node's uptime counter is already running and it successfully submits an uptime report later, then no violation happens. We mark these as unfinalized
     if power_manage_boot and end_time > power_manage_boot + MAX_BOOT_TIME:
