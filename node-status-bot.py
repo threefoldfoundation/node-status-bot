@@ -707,7 +707,7 @@ def violations(update: Update, context: CallbackContext):
 
         current_period = grid3.minting.Period()
         text = ''
-        for node_id in farmerbot_node_ids:
+        for node_id in sorted(farmerbot_node_ids):
             violations = find_violations.check_node(con, node_id, current_period)
             if violations:
                 text += format_violations(node_id, violations) + '\n'
