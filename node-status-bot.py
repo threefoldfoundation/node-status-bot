@@ -18,6 +18,11 @@ import find_violations
 
 # from grid3.rmb import RmbClient, RmbPeer
 
+# Technically Telegram supports messages up to 4096 characters, beyond which an
+# error is returned. However in my experience, messages longer than 3800 chars
+# with html formatting don't get formatted past 3800
+MAX_TEXT_LENGTH = 3800
+
 NETWORKS = ['main', 'test', 'dev']
 DEFAULT_PING_TIMEOUT = 10
 BOOT_TOLERANCE = 60 * 40
@@ -393,12 +398,34 @@ def populate_violations(bot_data):
 
 def send_message(context, chat_id, text):
     try:
-        context.bot.send_message(chat_id=chat_id, text=text)
+        if len(text) > MAX_TEXT_LENGTH:
+            for message in split_message(text):
+                context.bot.send_message(chat_id=chat_id, text=message)
+        else:
+            context.bot.send_message(chat_id=chat_id, text=text)
     except telegram.error.Unauthorized:
         # User blocked the bot or deleted their account
         pass
     except:
         logging.exception('Error sending message')
+
+def split_message(text):
+    # The only messages that get over length at the time of writing this
+    # function are violations reports. Since each node's violations are
+    # separated by two blank lines, we can split on those and avoid a message
+    # break in the middle of one node's section
+    messages = []
+    message = ''
+    splitter = '\n\n\n'
+    for chunk in text.split(splitter):
+        if len(message) + len(chunk) > MAX_TEXT_LENGTH:
+            messages.append(message.rstrip(splitter))
+            message = chunk + splitter
+        else:
+            message += chunk + splitter
+    if message:
+        messages.append(message.rstrip(splitter))
+    return messages
 
 def start(update: Update, context: CallbackContext):
     chat_id = update.effective_chat.id
