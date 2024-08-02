@@ -11,9 +11,8 @@ Database locked issues were apparently resolved by switching to using WAL mode. 
 import sqlite3, datetime, time, logging, functools, argparse
 from threading import Thread
 from multiprocessing import Process, JoinableQueue
-from websocket._exceptions import WebSocketConnectionClosedException
+from websocket._exceptions import WebSocketConnectionClosedException, WebSocketAddressException
 import prometheus_client
-import grid3.network
 from grid3 import tfchain, minting
 
 MIN_WORKERS = 2
@@ -216,11 +215,13 @@ def scale_workers(processes, block_queue, write_queue):
 def spawn_subscriber(block_queue, client):
     callback = functools.partial(subscription_callback, block_queue)
     sub_thread = Thread(target=client.sub.subscribe_block_headers, args=[callback])
+    sub_thread.daemon = True
     sub_thread.start()
     return sub_thread
 
 def spawn_worker(block_queue, write_queue):
     process = Process(target=processor, args=[block_queue, write_queue])
+    process.daemon = True
     process.start()
     return process
 
@@ -265,13 +266,18 @@ if __name__ == '__main__':
         # By default, use beginning of current minting period
         start_number = client.find_block_minting(minting.Period().start)
 
+    # Without cancel_join_thread, we can end up deadlocked on trying to flush buffers out to the queue when the program is exiting, since the processes consuming the queue will exit first. We don't care about the data loss implications because all of our data can be fetched again
     block_queue = JoinableQueue()
+    block_queue.cancel_join_thread()
     write_queue = JoinableQueue()
+    block_queue.cancel_join_thread()
 
     writer_proc = Process(target=db_writer, args=[write_queue])
+    writer_proc.daemon = True
     writer_proc.start()
 
     powers_thread = Thread(target=fetch_powers, args=[start_number])
+    powers_thread.daemon = True
     powers_thread.start()
 
     if args.end or args.end_block:
@@ -336,7 +342,10 @@ if __name__ == '__main__':
 
             # We can periodically get disconnected from the websocket. On each loop we try once to reconnect in case we need the client below
             if not client.sub.websocket.connected:
-                client.sub.connect_websocket()
+                try:
+                    client.sub.connect_websocket()
+                except WebSocketAddressException as e:
+                    print(e)
 
             # We just discard any processes that have died for any reason. They will be replaced by the auto scaling. In fact, we don't try to handle errors at all in the worker processes--the blocks just get retried later
             processes = [t for t in processes if t.is_alive()]
@@ -370,11 +379,15 @@ if __name__ == '__main__':
                     print('Queued', len(missing_blocks), 'missing blocks')
                 else:
                     # TODO: Ideally we would store the timestamps of the blocks as they are processed initially rather than querying for it again
-                    block = client.sub.get_block(block_number=last_block)
-                    timestamp = client.get_timestamp(block) // 1000
-                    with con:
-                        con.execute("UPDATE kv SET value=? WHERE key='checkpoint_block'", (last_block,))
-                        con.execute("UPDATE kv SET value=? WHERE key='checkpoint_time'", (timestamp,))
+                    try:
+                        block = client.sub.get_block(block_number=last_block)
+                        timestamp = client.get_timestamp(block) // 1000
+                        with con:
+                            con.execute("UPDATE kv SET value=? WHERE key='checkpoint_block'", (last_block,))
+                            con.execute("UPDATE kv SET value=? WHERE key='checkpoint_time'", (timestamp,))
+                    except WebSocketConnectionClosedException as e:
+                        # We already try reconnecting on each pass of the loop, so here just log the error and move on
+                        print(e)
 
             scale_workers(processes, block_queue, write_queue)
 
@@ -382,7 +395,9 @@ if __name__ == '__main__':
             period = minting.Period()
             if period.offset > current_period.offset:
                 start_number = client.find_block_minting(period.start)
-                Thread(target=fetch_powers, args=[start_number]).start()
+                powers_thread = Thread(target=fetch_powers, args=[start_number])
+                powers_thread.daemon = True
+                powers_thread.start()
                 current_period = period
 
             # Also make sure we keep alive our subscription thread. If there's an error in the callback, it propagates up and the thread dies
@@ -393,4 +408,5 @@ if __name__ == '__main__':
             if not writer_proc.is_alive():
                 print("Writer proc died, respawning it")
                 writer_proc = Process(target=db_writer, args=[write_queue])
+                writer_proc.daemon = True
                 writer_proc.start()
