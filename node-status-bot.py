@@ -1,6 +1,5 @@
 import logging, argparse, time, sqlite3
 from datetime import datetime
-import requests
 
 import telegram
 from telegram import Update, ParseMode
