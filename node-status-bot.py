@@ -15,8 +15,6 @@ from grid3.types import Node
 
 import find_violations
 
-# from grid3.rmb import RmbClient, RmbPeer
-
 # Technically Telegram supports messages up to 4096 characters, beyond which an
 # error is returned. However in my experience, messages longer than 3800 chars
 # with html formatting don't get formatted past 3800
@@ -28,8 +26,6 @@ BOOT_TOLERANCE = 60 * 40
 
 parser = argparse.ArgumentParser()
 parser.add_argument('token', help='Specify a bot token')
-parser.add_argument('-s', '--secret', 
-                    help='A TF Chain secret for use with RMB', type=str)
 parser.add_argument('-v', '--verbose', help='Verbose output', 
                     action="store_true")
 parser.add_argument('-p', '--poll', help='Set polling frequency in seconds', 
@@ -56,18 +52,6 @@ devnet_gql = grid3.graphql.GraphQL('https://graphql.dev.grid.tf/graphql')
 graphqls = {'main': mainnet_gql,
             'test': testnet_gql,
             'dev': devnet_gql}
-
-# Ping is disabled for now
-# if args.secret is None:
-#     print('Secret is required for RMB functions. Please specify with -s or --secret')
-#     exit()
-
-# rmb_peers = {net: RmbPeer(args.secret, net, net + '-rmb-peer.log',
-#                           spawn_redis=True, redis_port=None,
-#                           redis_logfile=net + '-redis.log')
-#              for net in NETWORKS}
-
-# rmb_clients = {net: RmbClient(rmb_peers[net].redis_port) for net in NETWORKS}
 
 if args.verbose:
     log_level = logging.INFO
@@ -347,29 +331,6 @@ def node_used_farmerbot(con, node_id):
     result = con.execute("SELECT 1 FROM PowerStateChanged WHERE node_id=? AND state='Down'", (node_id,)).fetchone()
     return result is not None
 
-def ping_rmb(net, nodes, timeout):
-    """
-    Ping one or more nodes via RMB.
-    """
-    client = rmb_clients[net]
-    twins = [node.twinId for node in nodes]
-
-    # Even with exp set, we can still get replies after the timeout, this means we should flush the queue before starting and/or check timestamps on incoming messages. It also means we can't stop receiving when number of received messages equals number of nodes queried, since replies for other nodes can come in and cause a false failure.
-    client.send('zos.statistics.get', twins, exp_delta=timeout)
-
-    finished = time.time() + timeout
-    replies = []
-    remaining = timeout
-    while remaining > 0 and len(replies) < len(nodes):
-        if reply := client.receive(remaining):
-            replies.append(reply)
-
-        remaining = finished - time.time()
-
-    twins_replied = [int(reply['src']) for reply in replies]
-    up_nodes = [node for node in nodes if node.twinId in twins_replied]
-    return up_nodes
-
 def populate_violations(bot_data):
     # Since we only want to notify users about _new_ violations, we need to establish a baseline at some point (when the feature is enabled or when a new bot is started for the first time)
     if bot_data.setdefault('violations_populated', False):
@@ -498,7 +459,7 @@ def status_gql(update: Update, context: CallbackContext):
 
 def status_ping(update: Update, context: CallbackContext):
     """
-    Get the node status using a ping over RMB.
+    Get the node status using a ping.
     """
 
     chat_id = update.effective_chat.id
@@ -506,50 +467,6 @@ def status_ping(update: Update, context: CallbackContext):
 
     send_message(context, chat_id, text='Ping is disabled for now.')
     return
-
-    try:
-        timeout = user['timeout']
-    except KeyError:
-        timeout = DEFAULT_PING_TIMEOUT
-    net = user['net']
-
-    if context.args:
-        try:
-            node_ids = [int(arg) for arg in context.args]
-        except ValueError:
-            send_message(context, chat_id, text='There was a problem processing your input. This command accepts one or more node ids separated by a space.')
-            return
-        
-        nodes = get_nodes(net, node_ids)
-        if not nodes:
-            send_message(context, chat_id, text='There was a problem processing your input. No valid node ids for this network.')
-            return
-
-        send_message(context, chat_id, 
-                                 text='Pinging with {} second timeout...'
-                                      .format(timeout))
-        up_nodes = ping_rmb(net, nodes, timeout)
-
-        if len(nodes) == 1:
-            if up_nodes:
-                send_message(context, chat_id, text='Node {} responded successfully.'.format(nodes[0].nodeId))
-            else:
-                send_message(context, chat_id, text='Node {} did not respond.'.format(nodes[0].nodeId))
-
-        else:
-            msg = ''
-            if up_nodes:
-                msg += '<b><u>Responsive nodes:</u></b>\n'
-                msg += format_vertical_list([node.nodeId for node in up_nodes])
-
-            if len(up_nodes) < len(nodes):
-                rest = [node.nodeId for node in nodes if node not in up_nodes]
-                if up_nodes:
-                    msg += '\n'
-                msg += '<b><u>Unresponsive nodes:</u></b>\n'
-                msg += format_vertical_list(rest)
-
-            send_message(context, chat_id, text=msg)
 
 def subscribe(update: Update, context: CallbackContext):
     chat_id = update.effective_chat.id
@@ -756,8 +673,3 @@ updater.job_queue.run_repeating(check_job, interval=args.poll, first=1)
 
 updater.start_polling()
 updater.idle()
-
-# Ping is disabled for now
-# for peer in rmb_peers.values():
-#     peer.redis.kill()
-#     peer.peer.kill()
