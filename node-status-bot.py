@@ -24,48 +24,6 @@ NETWORKS = ['main', 'test', 'dev']
 DEFAULT_PING_TIMEOUT = 10
 BOOT_TOLERANCE = 60 * 40
 
-parser = argparse.ArgumentParser()
-parser.add_argument('token', help='Specify a bot token')
-parser.add_argument('-v', '--verbose', help='Verbose output', 
-                    action="store_true")
-parser.add_argument('-p', '--poll', help='Set polling frequency in seconds', 
-                    type=int, default=60)
-parser.add_argument('-a', '--admin', help='Set the admin chat id', type=int)
-parser.add_argument('-t', '--test', help='Enable test feature', 
-                    action="store_true")
-parser.add_argument('-d', '--dump', help='Dump bot data', action="store_true")
-parser.add_argument('-f', '--db_file', 
-                    help='Specify file for sqlite db', type=str, default='tfchain.db')
-args = parser.parse_args()
-
-pickler = PicklePersistence(filename='bot_data')
-
-defaults = Defaults(parse_mode=ParseMode.HTML)
-updater = Updater(token=args.token, persistence=pickler, use_context=True, defaults=defaults)
-
-dispatcher = updater.dispatcher
-
-mainnet_gql = grid3.graphql.GraphQL('https://graphql.grid.tf/graphql')
-testnet_gql = grid3.graphql.GraphQL('https://graphql.test.grid.tf/graphql')
-devnet_gql = grid3.graphql.GraphQL('https://graphql.dev.grid.tf/graphql')
-
-graphqls = {'main': mainnet_gql,
-            'test': testnet_gql,
-            'dev': devnet_gql}
-
-if args.verbose:
-    log_level = logging.INFO
-
-    #Force fetching the schemas when verbose so they don't dump on console
-    for gql in graphqls.values():
-        gql.fetch_schema()
-else:
-    log_level = logging.WARNING
-
-logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=log_level, 
-    handlers=[logging.FileHandler('logs'), logging.StreamHandler()])
-
 def check_chat(update: Update, context: CallbackContext):
     chat = update.effective_chat.id
     send_message(context, chat, text='Your chat id is {}'.format(chat))
@@ -631,6 +589,47 @@ def violations(update: Update, context: CallbackContext):
             send_message(context, chat_id, text=text)
         else:
             send_message(context, chat_id, text='No violations found')
+
+parser = argparse.ArgumentParser()
+parser.add_argument('token', help='Specify a bot token')
+parser.add_argument('-v', '--verbose', help='Verbose output', 
+                    action="store_true")
+parser.add_argument('-p', '--poll', help='Set polling frequency in seconds', 
+                    type=int, default=60)
+parser.add_argument('-t', '--test', help='Enable test feature', 
+                    action="store_true")
+parser.add_argument('-d', '--dump', help='Dump bot data', action="store_true")
+parser.add_argument('-f', '--db_file', 
+                    help='Specify file for sqlite db', type=str, default='tfchain.db')
+args = parser.parse_args()
+
+pickler = PicklePersistence(filename='bot_data')
+
+defaults = Defaults(parse_mode=ParseMode.HTML)
+updater = Updater(token=args.token, persistence=pickler, use_context=True, defaults=defaults)
+
+dispatcher = updater.dispatcher
+
+mainnet_gql = grid3.graphql.GraphQL('https://graphql.grid.tf/graphql')
+testnet_gql = grid3.graphql.GraphQL('https://graphql.test.grid.tf/graphql')
+devnet_gql = grid3.graphql.GraphQL('https://graphql.dev.grid.tf/graphql')
+
+graphqls = {'main': mainnet_gql,
+            'test': testnet_gql,
+            'dev': devnet_gql}
+
+if args.verbose:
+    log_level = logging.INFO
+
+    #Force fetching the schemas when verbose so they don't dump on console
+    for gql in graphqls.values():
+        gql.fetch_schema()
+else:
+    log_level = logging.WARNING
+
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=log_level, 
+    handlers=[logging.FileHandler('logs'), logging.StreamHandler()])
 
 # Anyone commands
 dispatcher.add_handler(CommandHandler('chat_id', check_chat))
