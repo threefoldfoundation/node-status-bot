@@ -17,6 +17,7 @@ grid3==0.1.9
 idna==3.4
 more-itertools==10.2.0
 multidict==6.0.4
+prometheus_client==0.20.0
 py-bip39-bindings==0.1.11
 py-ed25519-zebra-bindings==1.0.1
 py-sr25519-bindings==0.2.0
