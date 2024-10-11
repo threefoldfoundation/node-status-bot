@@ -252,8 +252,7 @@ if __name__ == '__main__':
     con = new_connection()
     prep_db(con)
 
-    results = con.execute("SELECT * FROM processed_blocks").fetchall()
-    processed_blocks = {r[0] for r in results}
+    processed_blocks = get_processed_blocks(con)
 
     # Start tfchain client
     client = tfchain.TFChain()
