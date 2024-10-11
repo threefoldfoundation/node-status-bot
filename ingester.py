@@ -24,9 +24,8 @@ POST_PERIOD = 60 * 60
 RETRIES = 3
 
 def load_queue(start_number, end_number, block_queue):
-    total_blocks = set(range(start_number, end_number + 1))
     processed_blocks = get_processed_blocks(con)
-    missing_blocks = total_blocks - processed_blocks
+    missing_blocks = [b for b in range(start_number, end_number) if b not in processed_blocks]
     for i in missing_blocks:
         block_queue.put(i)
     return len(missing_blocks)
@@ -102,8 +101,8 @@ def get_block(client, block_number):
     return block, events
 
 def get_processed_blocks(con):
-    results = con.execute("SELECT * FROM processed_blocks").fetchall()
-    return {r[0] for r in results}
+    result = con.execute("SELECT * FROM processed_blocks").fetchall()
+    return [x[0] for x in result]
 
 def new_connection(db_file=None):
     if db_file is None:
@@ -247,8 +246,6 @@ if __name__ == '__main__':
     # Prep database and grab already processed blocks
     con = new_connection()
     prep_db(con)
-
-    processed_blocks = get_processed_blocks(con)
 
     # Start tfchain client
     client = tfchain.TFChain()
