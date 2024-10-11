@@ -33,22 +33,18 @@ def load_queue(start_number, end_number, block_queue):
 
 def db_writer(write_queue):
     con = new_connection()
-    processed_blocks = get_processed_blocks(con)
 
     while 1:
         job = write_queue.get()
         if job is None:
             return
 
-        try: 
+        try:
             with con:
-                block_number = job[0]
-                if block_number not in processed_blocks:
-                    updates = job[1]
-                    for update in updates:
-                        con.execute(*update)
-                    con.execute("INSERT INTO processed_blocks VALUES(?)", (block_number,))
-                    processed_blocks.add(block_number)
+                block_number, updates = job
+                for update in updates:
+                    con.execute(*update)
+                con.execute("INSERT OR IGNORE INTO processed_blocks VALUES(?)", (block_number,))
         except Exception as e:
             print("Got an exception in write loop:", e)
             print("While processing job:", job)
