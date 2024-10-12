@@ -24,8 +24,17 @@ POST_PERIOD = 60 * 60
 RETRIES = 3
 
 def load_queue(start_number, end_number, block_queue):
-    processed_blocks = get_processed_blocks(con)
-    missing_blocks = [b for b in range(start_number, end_number) if b not in processed_blocks]
+    # TODO: this as a SQL query?
+    processed_blocks = sorted(get_processed_blocks(con))
+    missing_blocks = []
+    if processed_blocks[0] > start_number:
+        missing_blocks.extend(range(start_number, processed_blocks[0]))
+    if processed_blocks[-1] < end_number:
+        missing_blocks.extend(range(processed_blocks[-1] + 1, end_number + 1))
+    for previous, current in zip(processed_blocks, processed_blocks[1:]):
+        if current > previous + 1:
+            missing_blocks.extend(range(previous + 1, current))
+
     for i in missing_blocks:
         block_queue.put(i)
     return len(missing_blocks)
