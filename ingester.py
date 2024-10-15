@@ -563,7 +563,7 @@ if __name__ == "__main__":
 
                 last_block = con.execute(
                     "SELECT MAX(block_number) FROM processed_blocks"
-                )
+                ).fetchone()[0]
                 print("Last processed block is:", last_block)
                 missing_blocks = find_missing(con, first_block, last_block)
 
