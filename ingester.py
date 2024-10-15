@@ -561,15 +561,11 @@ if __name__ == "__main__":
                     ).fetchone()[0],
                 )
 
-                processed_blocks = con.execute(
-                    "SELECT block_number FROM processed_blocks WHERE block_number >= ?",
-                    (first_block,),
-                ).fetchall()
-                processed_blocks = {b[0] for b in processed_blocks}
-
-                last_block = max(processed_blocks)
-                all_blocks = {b for b in range(first_block, last_block + 1)}
-                missing_blocks = all_blocks - processed_blocks
+                last_block = con.execute(
+                    "SELECT MAX(block_number) FROM processed_blocks"
+                )
+                print("Last processed block is:", last_block)
+                missing_blocks = find_missing(first_block, last_block)
 
                 if missing_blocks:
                     for b in missing_blocks:
