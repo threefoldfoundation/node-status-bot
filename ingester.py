@@ -565,7 +565,7 @@ if __name__ == "__main__":
                     "SELECT MAX(block_number) FROM processed_blocks"
                 )
                 print("Last processed block is:", last_block)
-                missing_blocks = find_missing(first_block, last_block)
+                missing_blocks = find_missing(con, first_block, last_block)
 
                 if missing_blocks:
                     for b in missing_blocks:
