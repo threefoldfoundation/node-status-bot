@@ -10,7 +10,7 @@ from gql.transport.requests import RequestsHTTPTransport
 from gql.transport.exceptions import TransportServerError
 
 import grid3.graphql
-import grid3.minting
+from grid3.minting.period import Period
 from grid3.types import Node
 
 import find_violations
@@ -174,8 +174,8 @@ def format_violations(node_id, violations):
 
 def get_con_and_periods():
     con = sqlite3.connect(args.db_file)
-    current_period = grid3.minting.Period()
-    last_period = grid3.minting.Period(offset=current_period.offset - 1)
+    current_period = Period()
+    last_period = Period(offset=current_period.offset - 1)
     periods = (current_period, last_period)
     return con, periods
 
@@ -579,7 +579,7 @@ def violations(update: Update, context: CallbackContext):
         else:
             send_message(context, chat_id, text='Checking node{} for violations...'.format(format_list(farmerbot_node_ids)))
 
-        current_period = grid3.minting.Period()
+        current_period = Period()
         text = ''
         for node_id in sorted(farmerbot_node_ids):
             violations = find_violations.check_node(con, node_id, current_period)

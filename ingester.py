@@ -16,7 +16,8 @@ from websocket._exceptions import (
     WebSocketAddressException,
 )
 import prometheus_client
-from grid3 import tfchain, minting
+from grid3.minting.period import Period
+from grid3 import tfchain
 
 MIN_WORKERS = 2
 SLEEP_TIME = 30
@@ -402,7 +403,7 @@ if __name__ == "__main__":
         start_number = client.find_block_minting(args.start)
     else:
         # By default, use beginning of current minting period
-        start_number = client.find_block_minting(minting.Period().start)
+        start_number = client.find_block_minting(Period().start)
 
     # Without cancel_join_thread, we can end up deadlocked on trying to flush buffers out to the queue when the program is exiting, since the processes consuming the queue will exit first. We don't care about the data loss implications because all of our data can be fetched again
     block_queue = JoinableQueue()
@@ -496,7 +497,7 @@ if __name__ == "__main__":
             con, start_number, block_number - 1, block_queue, write_queue
         )
 
-        current_period = minting.Period()
+        current_period = Period()
         processed_count = con.execute(
             "SELECT COUNT(1) FROM processed_blocks"
         ).fetchone()[0]
@@ -592,7 +593,7 @@ if __name__ == "__main__":
             scale_workers(processes, block_queue, write_queue)
 
             # If we have entered a new minting period, spawn a thread to fetch the power info for each node at the start of the new period
-            period = minting.Period()
+            period = Period()
             if period.offset > current_period.offset:
                 start_number = client.find_block_minting(period.start)
                 powers_thread = Thread(target=fetch_powers, args=[start_number])
