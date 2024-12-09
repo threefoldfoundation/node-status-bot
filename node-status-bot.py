@@ -566,7 +566,7 @@ def violations(update: Update, context: CallbackContext):
     farmerbot_node_ids = []
     for node_id in node_ids:
         con = sqlite3.connect(args.db_file)
-        exists = con.execute('SELECT 1 FROM NodeUptimeReported WHERE node_id=?', (node_id,)).fetchone()
+        exists = con.execute('SELECT 1 FROM PowerTargetChanged WHERE node_id=?', (node_id,)).fetchone()
         if exists:
             farmerbot_node_ids.append(node_id)
 
