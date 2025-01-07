@@ -184,3 +184,27 @@ class RqliteDB:
                     violation["finalized"],
                 ),
             )
+
+    def get_subscribed_nodes(self) -> List[Tuple[int, List[int]]]:
+        """Get list of all nodes with active subscriptions
+        
+        Returns:
+            List of tuples where each tuple contains:
+            - node_id: int
+            - chat_ids: List[int] of chat IDs subscribed to this node
+        """
+        with self.conn.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT n.node_id, GROUP_CONCAT(s.chat_id)
+                FROM nodes n
+                JOIN subscriptions s ON n.node_id = s.node_id AND n.network = s.network
+                GROUP BY n.node_id
+                """
+            )
+            
+            # Convert the comma-separated chat_ids string to a list of integers
+            return [
+                (row[0], [int(chat_id) for chat_id in row[1].split(',')])
+                for row in cursor.fetchall()
+            ]
