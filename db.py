@@ -1,4 +1,4 @@
-from typing import Any, Dict
+from typing import Any, Dict, List
 
 import rqlite
 
@@ -49,44 +49,23 @@ class RqliteDB:
             for query in queries:
                 cursor.execute(query)
 
-    def get_chat(self, chat_id: int) -> Dict[str, Any]:
-        """Get chat data or create new if doesn't exist"""
+    def create_chat(self, chat_id: int) -> None:
+        """Create a new chat with default settings if it doesn't exist"""
         with self.conn.cursor() as cursor:
             cursor.execute("""
                 INSERT OR IGNORE INTO chats (chat_id) VALUES (?)
             """, (chat_id,))
 
+    def get_subscribed_nodes(self, chat_id: int, network: str) -> List[int]:
+        """Get list of node IDs that a chat is subscribed to for a specific network"""
+        with self.conn.cursor() as cursor:
             cursor.execute("""
-                SELECT c.chat_id, c.net,
-                       GROUP_CONCAT(s.node_id) AS nodes
-                FROM chats c
-                LEFT JOIN subscriptions s ON c.chat_id = s.chat_id
-                WHERE c.chat_id = ?
-                GROUP BY c.chat_id
-            """, (chat_id,))
-
-            row = cursor.fetchone()
-            if row:
-                return {
-                    'net': row[1],
-                    'nodes': {
-                        'main': [],
-                        'test': [],
-                        'dev': []
-                    } if not row[2] else {
-                        'main': [int(n) for n in row[2].split(',') if n],
-                        'test': [],
-                        'dev': []
-                    }
-                }
-            return {
-                'net': 'main',
-                'nodes': {
-                    'main': [],
-                    'test': [],
-                    'dev': []
-                }
-            }
+                SELECT s.node_id
+                FROM subscriptions s
+                WHERE s.chat_id = ? AND s.network = ?
+            """, (chat_id, network))
+            
+            return [row[0] for row in cursor.fetchall() if row[0] is not None]
 
     def update_chat_network(self, chat_id: int, network: str):
         with self.conn.cursor() as cursor:
