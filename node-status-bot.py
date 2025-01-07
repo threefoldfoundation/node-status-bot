@@ -2,6 +2,7 @@ import logging, argparse, time, sqlite3
 from datetime import datetime
 
 import telegram
+from db import RqliteDB
 from telegram import Update, ParseMode
 from telegram.ext import Updater, CallbackContext, CommandHandler, PicklePersistence, Defaults
 
@@ -240,19 +241,17 @@ def get_violations(con, node_id, periods):
     return violations
 
 def initialize(bot_data):
-    for key in ['chats', 'nodes']:
+    bot_data['db'] = RqliteDB()
+    
+    for key in ['nodes']:
         bot_data.setdefault(key, {})
 
     for net in NETWORKS:
         bot_data['nodes'].setdefault(net, {})
 
-    subs = 0
-    for chat, data in bot_data['chats'].items():
-        for net in NETWORKS:
-            if data['nodes'][net]:
-                subs += 1
-                break
-    print('{} chats and {} subscribed users'.format(len(bot_data['chats']), subs))
+    # Initialize all existing chats in the database
+    for chat_id in bot_data['db'].get_all_chats():
+        bot_data['chats'].setdefault(chat_id, new_user())
 
 def migrate_data(bot_data):
     """
@@ -267,22 +266,21 @@ def migrate_data(bot_data):
 
 def network(update: Update, context: CallbackContext):
     chat_id = update.effective_chat.id
-    user = context.bot_data['chats'].setdefault(chat_id, new_user())
-
-    user = context.bot_data['chats'].setdefault(chat_id, new_user())
+    db = context.bot_data['db']
+    
     if context.args:
         net = context.args[0]
         if net in NETWORKS:
-            user['net'] = net
+            db.update_chat_network(chat_id, net)
             send_message(context, chat_id, text='Set network to {}net'.format(net))
         else:
             send_message(context, chat_id, text='Please specify a valid network: dev, test, or main')
     else:
-        net = user['net']
+        net = db.get_chat_network(chat_id)
         send_message(context, chat_id, text='Network is set to {}net'.format(net))
 
 def new_user():
-    return {'net': 'main', 'nodes': {'main': [], 'test': [], 'dev': []}}
+    return {'nodes': {'main': [], 'test': [], 'dev': []}}
 
 def node_used_farmerbot(con, node_id):
     # Check if the node ever went standby, which is a requirement for it to receive a violation
@@ -347,6 +345,8 @@ def split_message(text):
 
 def start(update: Update, context: CallbackContext):
     chat_id = update.effective_chat.id
+    db = context.bot_data['db']
+    db.create_chat(chat_id)
     context.bot_data['chats'].setdefault(chat_id, new_user())
     msg = '''
 Hey there, 

@@ -208,3 +208,21 @@ class RqliteDB:
                 (row[0], [int(chat_id) for chat_id in row[1].split(",")])
                 for row in cursor.fetchall()
             ]
+
+    def get_chat_network(self, chat_id: int) -> str:
+        """Get the selected network for a chat"""
+        with self.conn.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT net FROM chats WHERE chat_id = ?
+                """,
+                (chat_id,)
+            )
+            row = cursor.fetchone()
+            return row[0] if row else 'main'
+
+    def get_all_chats(self) -> List[int]:
+        """Get list of all chat IDs in the database"""
+        with self.conn.cursor() as cursor:
+            cursor.execute("SELECT chat_id FROM chats")
+            return [row[0] for row in cursor.fetchall()]
