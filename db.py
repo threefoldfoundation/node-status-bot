@@ -185,9 +185,9 @@ class RqliteDB:
                 ),
             )
 
-    def get_subscribed_nodes(self) -> List[Tuple[int, List[int]]]:
+    def get_all_subscribed_nodes(self) -> List[Tuple[int, List[int]]]:
         """Get list of all nodes with active subscriptions
-        
+
         Returns:
             List of tuples where each tuple contains:
             - node_id: int
@@ -202,9 +202,9 @@ class RqliteDB:
                 GROUP BY n.node_id
                 """
             )
-            
+
             # Convert the comma-separated chat_ids string to a list of integers
             return [
-                (row[0], [int(chat_id) for chat_id in row[1].split(',')])
+                (row[0], [int(chat_id) for chat_id in row[1].split(",")])
                 for row in cursor.fetchall()
             ]
