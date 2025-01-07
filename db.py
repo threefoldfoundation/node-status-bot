@@ -58,9 +58,9 @@ class RqliteDB:
 
             cursor.execute("""
                 SELECT c.chat_id, c.net,
-                       GROUP_CONCAT(cn.node_id) AS nodes
+                       GROUP_CONCAT(s.node_id) AS nodes
                 FROM chats c
-                LEFT JOIN subscriptions cn ON c.chat_id = cn.chat_id
+                LEFT JOIN subscriptions s ON c.chat_id = s.chat_id
                 WHERE c.chat_id = ?
                 GROUP BY c.chat_id
             """, (chat_id,))
