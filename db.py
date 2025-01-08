@@ -135,7 +135,7 @@ class RqliteDB:
                 }
             return None
 
-    def create_node(self, node: Dict[str, Any], network: str):
+    def create_node(self, node, network: str):
         with self.conn.cursor() as cursor:
             cursor.execute(
                 """
@@ -145,17 +145,17 @@ class RqliteDB:
                 VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
                 (
-                    node["nodeId"],
+                    node.nodeId,
                     network,
-                    node["status"],
-                    node["updatedAt"],
-                    node["power"]["state"],
-                    node["power"]["target"],
-                    node.get("farmerbot", False),
+                    node.status,
+                    node.updatedAt,
+                    node.power.state,
+                    node.power.target,
+                    getattr(node, 'farmerbot', False),
                 ),
             )
 
-    def update_node(self, node: Dict[str, Any], network: str):
+    def update_node(self, node, network: str):
         with self.conn.cursor() as cursor:
             cursor.execute(
                 """
@@ -165,13 +165,13 @@ class RqliteDB:
                 VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
                 (
-                    node["nodeId"],
+                    node.nodeId,
                     network,
-                    node["status"],
-                    node["updatedAt"],
-                    node["power"]["state"],
-                    node["power"]["target"],
-                    node.get("farmerbot", False),
+                    node.status,
+                    node.updatedAt,
+                    node.power.state,
+                    node.power.target,
+                    getattr(node, 'farmerbot', False),
                 ),
             )
 
