@@ -9,8 +9,8 @@ class RqliteDB:
             host=host,
             port=port,
         )
-        self._init_db()
         self._enable_foreign_keys()
+        self._init_db()
 
     def _enable_foreign_keys(self):
         """Enable foreign key constraints for SQLite"""
