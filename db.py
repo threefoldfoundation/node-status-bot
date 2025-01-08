@@ -1,11 +1,14 @@
 from typing import Any, Dict, List, Tuple
 
-import pyrqlite.dbapi2 as rqlite
+import pyrqlite.dbapi2 as dbapi2
 
 
 class RqliteDB:
     def __init__(self, host: str = "localhost", port: int = 4001):
-        self.conn = rqlite.connect(host=host, port=port)
+        self.conn = dbapi2.connect(
+            host=host,
+            port=port,
+        )
         self._init_db()
 
     def _init_db(self):
