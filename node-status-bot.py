@@ -46,10 +46,10 @@ def check_job(context: CallbackContext):
         try:
             # Get all subscribed nodes and their chat subscriptions
             subscribed_nodes = db.get_all_subscribed_nodes()
-            
+
             # Convert to format: {node_id: [chat_ids]}
             subbed_nodes = {node_id: chat_ids for node_id, chat_ids in subscribed_nodes}
-            
+
             # Get current node statuses
             updates = get_nodes(net, subbed_nodes.keys())
 
@@ -74,7 +74,10 @@ def check_job(context: CallbackContext):
                     node_data = db.get_node(update.nodeId, net)
 
                 # Check for status changes
-                if node_data["power"]["target"] == "Down" and update.power["target"] == "Up":
+                if (
+                    node_data["power"]["target"] == "Down"
+                    and update.power["target"] == "Up"
+                ):
                     for chat_id in subbed_nodes[update.nodeId]:
                         send_message(
                             context,
@@ -114,7 +117,9 @@ def check_job(context: CallbackContext):
                             ),
                         )
 
-                elif node_data["status"] in ("down", "standby") and update.status == "up":
+                elif (
+                    node_data["status"] in ("down", "standby") and update.status == "up"
+                ):
                     for chat_id in subbed_nodes[update.nodeId]:
                         send_message(
                             context,
@@ -124,6 +129,11 @@ def check_job(context: CallbackContext):
                             ),
                         )
 
+                # We track which nodes have ever been managed by farmerbot,
+                # since those are the only ones that can get violations and
+                # scanning for violations is a relatively expensive operation
+                if node_data["status"] == "standby" or update.status == "standby":
+                    node_data["farmerbot"] = True
                 # Update node status in database
                 db.update_node(update, net)
 
@@ -141,7 +151,10 @@ def check_job(context: CallbackContext):
                                             update.nodeId, format_violation(violation)
                                         ),
                                     )
-                            elif violation["end_time"] - violation["boot_requested"] > BOOT_TOLERANCE:
+                            elif (
+                                violation["end_time"] - violation["boot_requested"]
+                                > BOOT_TOLERANCE
+                            ):
                                 for chat_id in subbed_nodes[update.nodeId]:
                                     send_message(
                                         context,
@@ -670,7 +683,7 @@ def unsubscribe(update: Update, context: CallbackContext):
                     removed_nodes.append(node_id)
             except ValueError:
                 pass
-        
+
         if node_ids:
             db.remove_subscriptions(chat_id, net, node_ids)
 
