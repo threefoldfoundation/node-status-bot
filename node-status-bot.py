@@ -652,7 +652,9 @@ def unsubscribe(update: Update, context: CallbackContext):
         for node_id in current_subs:
             db.remove_subscription(chat_id, net, node_id)
         send_message(
-            context, chat_id, text="You have been unsubscribed from all updates"
+            context,
+            chat_id,
+            text=f"You have been unsubscribed from all nodes on {net}net",
         )
     elif context.args:
         removed_nodes = []
