@@ -1,33 +1,39 @@
-import logging, argparse, time, sqlite3
+import argparse
+import logging
+import sqlite3
+import time
 from datetime import datetime
 
-import telegram
-from db import RqliteDB
-from telegram import Update, ParseMode
-from telegram.ext import Updater, CallbackContext, CommandHandler, PicklePersistence, Defaults
-
-from gql import Client, gql
-from gql.transport.requests import RequestsHTTPTransport
-from gql.transport.exceptions import TransportServerError
-
 import grid3.graphql
+import telegram
+from gql import gql
 from grid3.minting.period import Period
 from grid3.types import Node
+from telegram import ParseMode, Update
+from telegram.ext import (
+    CallbackContext,
+    CommandHandler,
+    Defaults,
+    Updater,
+)
 
 import find_violations
+from db import RqliteDB
 
 # Technically Telegram supports messages up to 4096 characters, beyond which an
 # error is returned. However in my experience, messages longer than 3800 chars
 # with html formatting don't get formatted past 3800
 MAX_TEXT_LENGTH = 3800
 
-NETWORKS = ['main', 'test', 'dev']
+NETWORKS = ["main", "test", "dev"]
 DEFAULT_PING_TIMEOUT = 10
 BOOT_TOLERANCE = 60 * 40
 
+
 def check_chat(update: Update, context: CallbackContext):
     chat = update.effective_chat.id
-    send_message(context, chat, text='Your chat id is {}'.format(chat))
+    send_message(context, chat, text="Your chat id is {}".format(chat))
+
 
 def check_job(context: CallbackContext):
     """
@@ -40,12 +46,12 @@ def check_job(context: CallbackContext):
         try:
             subbed_nodes = {}
 
-            for chat_id, data in context.bot_data['chats'].items():
-                for node_id in data['nodes'][net]:
+            for chat_id, data in context.bot_data["chats"].items():
+                for node_id in data["nodes"][net]:
                     subbed_nodes.setdefault(node_id, []).append(chat_id)
             updates = get_nodes(net, subbed_nodes)
 
-            if net == 'main':
+            if net == "main":
                 farmerbot_nodes = [n for n in subbed_nodes]
                 all_violations = {}
                 for node_id in farmerbot_nodes:
@@ -57,43 +63,85 @@ def check_job(context: CallbackContext):
 
         for update in updates:
             try:
-                node = context.bot_data['nodes'][net][update.nodeId]
+                node = context.bot_data["nodes"][net][update.nodeId]
 
-                if node.power['target'] == 'Down' and update.power['target'] == 'Up':
+                if node.power["target"] == "Down" and update.power["target"] == "Up":
                     for chat_id in subbed_nodes[node.nodeId]:
-                        send_message(context, chat_id, text='Node {} wake up initiated \N{hot beverage}'.format(node.nodeId))
+                        send_message(
+                            context,
+                            chat_id,
+                            text="Node {} wake up initiated \N{HOT BEVERAGE}".format(
+                                node.nodeId
+                            ),
+                        )
 
-                if node.status == 'up' and update.status == 'down':
+                if node.status == "up" and update.status == "down":
                     for chat_id in subbed_nodes[node.nodeId]:
-                        send_message(context, chat_id, text='Node {} has gone offline \N{warning sign}'.format(node.nodeId))
+                        send_message(
+                            context,
+                            chat_id,
+                            text="Node {} has gone offline \N{WARNING SIGN}".format(
+                                node.nodeId
+                            ),
+                        )
 
-                elif node.status == 'up' and update.status == 'standby':
+                elif node.status == "up" and update.status == "standby":
                     for chat_id in subbed_nodes[node.nodeId]:
-                        send_message(context, chat_id, text='Node {} has gone to sleep \N{last quarter moon with face}'.format(node.nodeId))
+                        send_message(
+                            context,
+                            chat_id,
+                            text="Node {} has gone to sleep \N{LAST QUARTER MOON WITH FACE}".format(
+                                node.nodeId
+                            ),
+                        )
 
-                elif node.status == 'standby' and update.status == 'down':
+                elif node.status == "standby" and update.status == "down":
                     for chat_id in subbed_nodes[node.nodeId]:
-                        send_message(context, chat_id, text='Node {} did not wake up within 24 hours \N{warning sign}'.format(node.nodeId))
+                        send_message(
+                            context,
+                            chat_id,
+                            text="Node {} did not wake up within 24 hours \N{WARNING SIGN}".format(
+                                node.nodeId
+                            ),
+                        )
 
-                elif node.status in ('down', 'standby') and update.status == 'up':
+                elif node.status in ("down", "standby") and update.status == "up":
                     for chat_id in subbed_nodes[node.nodeId]:
-                        send_message(context, chat_id, text='Node {} has come online \N{electric light bulb}'.format(node.nodeId))
+                        send_message(
+                            context,
+                            chat_id,
+                            text="Node {} has come online \N{ELECTRIC LIGHT BULB}".format(
+                                node.nodeId
+                            ),
+                        )
 
                 # We track which nodes have ever been managed by farmerbot, since those are the only ones that can get violations and scanning for violations is a relatively expensive operation
-                if node.status == 'standby' or update.status == 'standby':
+                if node.status == "standby" or update.status == "standby":
                     node.farmerbot = True
 
                 if node.nodeId in all_violations:
                     violations = all_violations[node.nodeId]
                     for v in violations:
-                        if v.boot_requested not in node.violations: 
+                        if v.boot_requested not in node.violations:
                             if v.finalized:
                                 for chat_id in subbed_nodes[node.nodeId]:
-                                    send_message(context, chat_id, text='🚨 Farmerbot violation detected for node {}. Node failed to boot within 30 minutes 🚨\n\n{}'.format(node.nodeId, format_violation(v)))
+                                    send_message(
+                                        context,
+                                        chat_id,
+                                        text="🚨 Farmerbot violation detected for node {}. Node failed to boot within 30 minutes 🚨\n\n{}".format(
+                                            node.nodeId, format_violation(v)
+                                        ),
+                                    )
                             elif v.end_time - v.boot_requested > BOOT_TOLERANCE:
                                 for chat_id in subbed_nodes[node.nodeId]:
-                                    send_message(context, chat_id, text='🚨 Probable farmerbot violation detected for node {}. Node appears to have not booted within 30 minutes of boot request. Check again with /violations after node boots 🚨\n\n{}'.format(node.nodeId, format_violation(v)))
-                        
+                                    send_message(
+                                        context,
+                                        chat_id,
+                                        text="🚨 Probable farmerbot violation detected for node {}. Node appears to have not booted within 30 minutes of boot request. Check again with /violations after node boots 🚨\n\n{}".format(
+                                            node.nodeId, format_violation(v)
+                                        ),
+                                    )
+
                         # We do this every time because information about when a node finally booted might become available later. Right now we don't use this info though. Might be effective as a cache for manual violation lookups
                         node.violations[v.boot_requested] = v
 
@@ -105,73 +153,79 @@ def check_job(context: CallbackContext):
                 node.updatedAt = update.updatedAt
                 node.power = update.power
 
+
 def format_list(items):
     if len(items) == 1:
-        text = ' ' + str(items[0])
+        text = " " + str(items[0])
     elif len(items) == 2:
-        text = 's ' + str(items[0]) + ' and ' + str(items[1])
+        text = "s " + str(items[0]) + " and " + str(items[1])
     else:
-        text = 's '
+        text = "s "
         for i in items[:-1]:
-            text = text + str(i) + ', '
-        text = text + 'and ' + str(items[-1])
+            text = text + str(i) + ", "
+        text = text + "and " + str(items[-1])
     return text
+
 
 def format_nodes(up, down, standby):
     up.sort()
     down.sort()
     standby.sort()
-    text = ''
+    text = ""
 
     if up:
-        text += '<b><u>Up nodes:</u></b>\n'
+        text += "<b><u>Up nodes:</u></b>\n"
         text += format_vertical_list(up)
     if down:
         if up:
-            text += '\n'
-        text += '<b><u>Down nodes:</u></b>\n'
+            text += "\n"
+        text += "<b><u>Down nodes:</u></b>\n"
         text += format_vertical_list(down)
     if standby:
         if up or down:
-            text += '\n'
-        text += '<b><u>Standby nodes:</u></b>\n'
+            text += "\n"
+        text += "<b><u>Standby nodes:</u></b>\n"
         text += format_vertical_list(standby)
 
     return text
 
+
 def format_vertical_list(items):
-    text = ''
+    text = ""
     for item in items:
-        text += str(item) + '\n'
+        text += str(item) + "\n"
     return text
+
 
 def format_violation(violation):
-    text = ''
+    text = ""
     requested = datetime.fromtimestamp(violation.boot_requested)
-    text += '<i>Boot requested at:</i>\n'
-    text += '{} UTC\n'.format(requested)
+    text += "<i>Boot requested at:</i>\n"
+    text += "{} UTC\n".format(requested)
     if violation.booted_at:
         booted = datetime.fromtimestamp(violation.booted_at)
-        text += '<i>Node booted at:</i>\n'
-        text += '{} UTC\n'.format(booted)
+        text += "<i>Node booted at:</i>\n"
+        text += "{} UTC\n".format(booted)
     else:
-        text += 'Node has not booted\n'
+        text += "Node has not booted\n"
     return text
 
+
 def format_violations(node_id, violations):
-    text = '<b><u>Violations for node {}:</u></b>\n\n'.format(node_id)
+    text = "<b><u>Violations for node {}:</u></b>\n\n".format(node_id)
     for violation in violations:
         requested = datetime.fromtimestamp(violation.boot_requested)
-        text += '<i>Boot requested at:</i>\n'
-        text += '{} UTC\n'.format(requested)
+        text += "<i>Boot requested at:</i>\n"
+        text += "{} UTC\n".format(requested)
         if violation.booted_at:
             booted = datetime.fromtimestamp(violation.booted_at)
-            text += '<i>Node booted at:</i>\n'
-            text += '{} UTC\n'.format(booted)
+            text += "<i>Node booted at:</i>\n"
+            text += "{} UTC\n".format(booted)
         else:
-            text += 'Node has not booted\n'
-        text += '\n'
+            text += "Node has not booted\n"
+        text += "\n"
     return text
+
 
 def get_con_and_periods():
     con = sqlite3.connect(args.db_file)
@@ -180,23 +234,25 @@ def get_con_and_periods():
     periods = (current_period, last_period)
     return con, periods
 
+
 def get_nodes(net, node_ids):
     """
     Query a list of node ids in GraphQL, create Node objects for consistency and easy field access, then assign them a status and return them.
     """
     graphql = graphqls[net]
-    nodes = graphql.nodes(['nodeID', 'twinID', 'updatedAt', 'power'], 
-                          nodeID_in=node_ids)
+    nodes = graphql.nodes(
+        ["nodeID", "twinID", "updatedAt", "power"], nodeID_in=node_ids
+    )
     nodes = [Node(node) for node in nodes]
 
     one_hour_ago = time.time() - 60 * 60
 
     for node in nodes:
-        if node.power is None: 
-            node.power = {'state': None, 'target': None}
+        if node.power is None:
+            node.power = {"state": None, "target": None}
         node.status = get_node_status(node)
 
-        if node.status == 'standby':
+        if node.status == "standby":
             node.farmerbot = True
         else:
             node.farmerbot = False
@@ -204,12 +260,13 @@ def get_nodes(net, node_ids):
 
     return nodes
 
+
 def get_nodes_from_file(net, node_ids):
     """
     For use in test mode, to emulate get_nodes using data in a file. The updatedAt value is given in the file as a delta of how many seconds in the past and converted to absolute time here
     """
-    if net == 'main':
-        text = open('./test/node', 'r').read()
+    if net == "main":
+        text = open("./test/node", "r").read()
         node = Node(json.loads(text))
         node.updatedAt = time.time() - node.updatedAt
         node.status = get_node_status(node)
@@ -219,6 +276,7 @@ def get_nodes_from_file(net, node_ids):
     else:
         return []
 
+
 def get_node_status(node):
     """
     More or less the same methodology that Grid Proxy uses. Nodes are supposed to report every 40 minutes, so we consider them offline after one hour. Standby nodes should wake up once every 24 hours, so we consider them offline after that.
@@ -227,12 +285,13 @@ def get_node_status(node):
     one_day_ago = time.time() - 60 * 60 * 24
 
     # It's possible that some node might not have a power state
-    if node.updatedAt > one_hour_ago and node.power['state'] != 'Down':
-        return 'up'
-    elif node.power['state'] == 'Down' and node.updatedAt > one_day_ago:
-        return 'standby'
+    if node.updatedAt > one_hour_ago and node.power["state"] != "Down":
+        return "up"
+    elif node.power["state"] == "Down" and node.updatedAt > one_day_ago:
+        return "standby"
     else:
-        return 'down'
+        return "down"
+
 
 def get_violations(con, node_id, periods):
     violations = []
@@ -240,69 +299,77 @@ def get_violations(con, node_id, periods):
         violations.extend(find_violations.check_node(con, node_id, period))
     return violations
 
+
 def initialize(bot_data):
-    bot_data['db'] = RqliteDB()
-    
-    for key in ['nodes']:
+    bot_data["db"] = RqliteDB()
+
+    for key in ["nodes"]:
         bot_data.setdefault(key, {})
 
     for net in NETWORKS:
-        bot_data['nodes'].setdefault(net, {})
+        bot_data["nodes"].setdefault(net, {})
 
-    # Initialize all existing chats in the database
-    for chat_id in bot_data['db'].get_all_chats():
-        bot_data['chats'].setdefault(chat_id, new_user())
 
 def migrate_data(bot_data):
     """
     Convert dict based node data to instances of Node class. Only needed when updating a bot that has existing data using the old style.
     """
     for net in NETWORKS:
-        nodes = bot_data['nodes'][net]
+        nodes = bot_data["nodes"][net]
         for node_id in nodes.keys():
             if type(nodes[node_id]) is dict:
-                nodes[node_id]['nodeID'] = node_id
+                nodes[node_id]["nodeID"] = node_id
                 nodes[node_id] = Node(nodes[node_id])
+
 
 def network(update: Update, context: CallbackContext):
     chat_id = update.effective_chat.id
-    db = context.bot_data['db']
-    
+    db = context.bot_data["db"]
+
     if context.args:
         net = context.args[0]
         if net in NETWORKS:
             db.update_chat_network(chat_id, net)
-            send_message(context, chat_id, text='Set network to {}net'.format(net))
+            send_message(context, chat_id, text="Set network to {}net".format(net))
         else:
-            send_message(context, chat_id, text='Please specify a valid network: dev, test, or main')
+            send_message(
+                context,
+                chat_id,
+                text="Please specify a valid network: dev, test, or main",
+            )
     else:
         net = db.get_chat_network(chat_id)
-        send_message(context, chat_id, text='Network is set to {}net'.format(net))
+        send_message(context, chat_id, text="Network is set to {}net".format(net))
+
 
 def new_user():
-    return {'nodes': {'main': [], 'test': [], 'dev': []}}
+    return {"nodes": {"main": [], "test": [], "dev": []}}
+
 
 def node_used_farmerbot(con, node_id):
     # Check if the node ever went standby, which is a requirement for it to receive a violation
-    result = con.execute("SELECT 1 FROM PowerStateChanged WHERE node_id=? AND state='Down'", (node_id,)).fetchone()
+    result = con.execute(
+        "SELECT 1 FROM PowerStateChanged WHERE node_id=? AND state='Down'", (node_id,)
+    ).fetchone()
     return result is not None
+
 
 def populate_violations(bot_data):
     # Since we only want to notify users about _new_ violations, we need to establish a baseline at some point (when the feature is enabled or when a new bot is started for the first time)
-    if bot_data.setdefault('violations_populated', False):
+    if bot_data.setdefault("violations_populated", False):
         return
 
     # We only track violations for mainnet
-    nodes = bot_data['nodes']['main']
+    nodes = bot_data["nodes"]["main"]
 
     con, periods = get_con_and_periods()
-    
+
     for node_id, node in nodes.items():
         violations = get_violations(con, node_id, periods)
         # Violations are uniquely identified per node by their first field (time that wake up was initiated). Storing them in this form helps to easily identify new violations later
-        node.violations =  {v.boot_requested: v for v in violations}
+        node.violations = {v.boot_requested: v for v in violations}
         try:
-            if violations or node.status == 'standby':
+            if violations or node.status == "standby":
                 node.farmerbot = True
             else:
                 node.farmerbot = False
@@ -310,7 +377,8 @@ def populate_violations(bot_data):
         except AttributeError:
             node.farmerbot = False
 
-    bot_data['violations_populated'] = True
+    bot_data["violations_populated"] = True
+
 
 def send_message(context, chat_id, text):
     try:
@@ -323,7 +391,8 @@ def send_message(context, chat_id, text):
         # User blocked the bot or deleted their account
         pass
     except:
-        logging.exception('Error sending message')
+        logging.exception("Error sending message")
+
 
 def split_message(text):
     # The only messages that get over length at the time of writing this
@@ -331,8 +400,8 @@ def split_message(text):
     # separated by two blank lines, we can split on those and avoid a message
     # break in the middle of one node's section
     messages = []
-    message = ''
-    splitter = '\n\n\n'
+    message = ""
+    splitter = "\n\n\n"
     for chunk in text.split(splitter):
         if len(message) + len(chunk) > MAX_TEXT_LENGTH:
             messages.append(message.rstrip(splitter))
@@ -343,17 +412,18 @@ def split_message(text):
 
     return messages
 
+
 def start(update: Update, context: CallbackContext):
     chat_id = update.effective_chat.id
-    db = context.bot_data['db']
+    db = context.bot_data["db"]
     db.create_chat(chat_id)
-    context.bot_data['chats'].setdefault(chat_id, new_user())
-    msg = '''
-Hey there, 
+    context.bot_data["chats"].setdefault(chat_id, new_user())
+    msg = """
+Hey there,
 
 I'm the ThreeFold node status bot. Beep boop.
 
-I can give you information about whether a node is up or down right now (/status) and also notify you if its state changes in the future (/subscribe). 
+I can give you information about whether a node is up or down right now (/status) and also notify you if its state changes in the future (/subscribe).
 
 Here are all the commands I support:
 
@@ -364,12 +434,12 @@ Example: /status 1
 
 /violations - scan for farmerbot related violations during the current minting period. Like status, this works on all subscribed nodes when no input is given.
 
-/subscribe - subscribe to updates about one or more nodes. If you don't provide an input, the nodes you are currently subscribed to will be shown. 
+/subscribe - subscribe to updates about one or more nodes. If you don't provide an input, the nodes you are currently subscribed to will be shown.
 Example: /sub 1 2 3
 
 /unsubscribe - unsubscribe from updates about one or more nodes. To unsubscribe from all node and thus stop all alerts, write "/unsubscribe all"
 
-/network - change the network to "dev", "test", or "main" (default is main). If you don't provide an input, the currently selected network is shown. 
+/network - change the network to "dev", "test", or "main" (default is main). If you don't provide an input, the currently selected network is shown.
 Example: /network main
 
 To report bugs, request features, or just say hi, please contact @scottyeager. Please also subscribe to the updates channel here for news on the bot: t.me/node_bot_updates
@@ -377,43 +447,53 @@ To report bugs, request features, or just say hi, please contact @scottyeager. P
 You can find the bot's source code on GitHub: github.com/threefoldfoundation/node-status-bot
 
 This bot is developed and operated on a best effort basis. Only you are responsible for your node's uptime and your farming rewards.
-    '''
+    """
     send_message(context, chat_id, text=msg)
+
 
 def status_gql(update: Update, context: CallbackContext):
     chat_id = update.effective_chat.id
-    user = context.bot_data['chats'].setdefault(chat_id, new_user())
-        
-    net = user['net']
+    user = context.bot_data["chats"].setdefault(chat_id, new_user())
+
+    net = user["net"]
 
     if context.args:
         try:
             node = get_nodes(net, context.args)[0]
-            send_message(context, chat_id, text='Node {} is {}'.format(node.nodeId, node.status))
+            send_message(
+                context, chat_id, text="Node {} is {}".format(node.nodeId, node.status)
+            )
         except IndexError:
-            send_message(context, chat_id, text='Node id not valid on {}net'.format(net))
+            send_message(
+                context, chat_id, text="Node id not valid on {}net".format(net)
+            )
         except:
             logging.exception("Failed to fetch node info")
-            send_message(context, chat_id, text='Error fetching node data. Please wait a moment and try again.')
+            send_message(
+                context,
+                chat_id,
+                text="Error fetching node data. Please wait a moment and try again.",
+            )
 
     else:
-        subbed_nodes = user['nodes'][net]
+        subbed_nodes = user["nodes"][net]
 
         if subbed_nodes:
             up, down, standby = [], [], []
-            text = ''
+            text = ""
             nodes = get_nodes(net, subbed_nodes)
             for node in nodes:
-                if node.status == 'up':
+                if node.status == "up":
                     up.append(node.nodeId)
-                elif node.status == 'down':
+                elif node.status == "down":
                     down.append(node.nodeId)
-                elif node.status == 'standby':
+                elif node.status == "standby":
                     standby.append(node.nodeId)
             text = format_nodes(up, down, standby)
             send_message(context, chat_id, text=text)
         else:
-            send_message(context, chat_id, text='Please specify a node id')
+            send_message(context, chat_id, text="Please specify a node id")
+
 
 def status_ping(update: Update, context: CallbackContext):
     """
@@ -421,17 +501,18 @@ def status_ping(update: Update, context: CallbackContext):
     """
 
     chat_id = update.effective_chat.id
-    user = context.bot_data['chats'].setdefault(chat_id, new_user())
+    user = context.bot_data["chats"].setdefault(chat_id, new_user())
 
-    send_message(context, chat_id, text='Ping is disabled for now.')
+    send_message(context, chat_id, text="Ping is disabled for now.")
     return
+
 
 def subscribe(update: Update, context: CallbackContext):
     chat_id = update.effective_chat.id
-    user = context.bot_data['chats'].setdefault(chat_id, new_user())
+    user = context.bot_data["chats"].setdefault(chat_id, new_user())
 
-    net = user['net']
-    subbed_nodes = user['nodes'][net]
+    net = user["net"]
+    subbed_nodes = user["nodes"][net]
 
     node_ids = []
     if context.args:
@@ -439,93 +520,127 @@ def subscribe(update: Update, context: CallbackContext):
             for arg in context.args:
                 node_ids.append(int(arg))
         except ValueError:
-            send_message(context, chat_id, text='There was a problem processing your input. This command accepts one or more node ids separated by a space.')
+            send_message(
+                context,
+                chat_id,
+                text="There was a problem processing your input. This command accepts one or more node ids separated by a space.",
+            )
             return
     else:
         if subbed_nodes:
-            send_message(context, chat_id, text='You are currently subscribed to node' + format_list(subbed_nodes))
+            send_message(
+                context,
+                chat_id,
+                text="You are currently subscribed to node" + format_list(subbed_nodes),
+            )
             return
         else:
-            send_message(context, chat_id, text='You are not subscribed to any nodes')
+            send_message(context, chat_id, text="You are not subscribed to any nodes")
             return
-    
+
     try:
         new_ids = [n for n in node_ids if n not in subbed_nodes]
         new_nodes = {node.nodeId: node for node in get_nodes(net, new_ids)}
         if new_nodes:
             # If there are nodes we haven't seen before, we need to check if they have been using farmerbot and if so preload any existing violations so they don't trigger alerts
-            known_nodes = context.bot_data['nodes'][net]
+            known_nodes = context.bot_data["nodes"][net]
             unknown_nodes = new_nodes.keys() - known_nodes.keys()
             if unknown_nodes:
                 con, periods = get_con_and_periods()
                 for node_id in unknown_nodes:
                     if node_used_farmerbot(con, node_id):
                         violations = get_violations(con, node_id, periods)
-                        new_nodes[node_id].violations = {v.boot_requested: v for v in violations}
-                    
+                        new_nodes[node_id].violations = {
+                            v.boot_requested: v for v in violations
+                        }
+
             known_nodes.update(new_nodes)
             # Do this to preserve the order since gql does not
             new_subs = [n for n in node_ids if n in new_nodes]
         else:
-            text = 'No valid node ids found to add.'
+            text = "No valid node ids found to add."
             if subbed_nodes:
-                text += ' You are currently subscribed to node' + format_list(subbed_nodes)
+                text += " You are currently subscribed to node" + format_list(
+                    subbed_nodes
+                )
             send_message(context, chat_id, text=text)
             return
-    
+
     except:
         logging.exception("Failed to fetch node info")
-        send_message(context, chat_id, text='Error fetching node data. Please wait a moment and try again.')
+        send_message(
+            context,
+            chat_id,
+            text="Error fetching node data. Please wait a moment and try again.",
+        )
         return
 
-    msg = 'You have been successfully subscribed to node' + format_list(new_subs)
+    msg = "You have been successfully subscribed to node" + format_list(new_subs)
 
     if subbed_nodes:
-        msg += '\n\nYou are now subscribed to node' + format_list(subbed_nodes + new_subs)
-    
+        msg += "\n\nYou are now subscribed to node" + format_list(
+            subbed_nodes + new_subs
+        )
+
     subbed_nodes.extend(new_subs)
     send_message(context, chat_id, text=msg)
+
 
 def timeout(update: Update, context: CallbackContext):
     """
     Sets a custom ping timeout for the user.
     """
     chat_id = update.effective_chat.id
-    user = context.bot_data['chats'].setdefault(chat_id, new_user())
+    user = context.bot_data["chats"].setdefault(chat_id, new_user())
 
     if context.args:
         try:
             timeout = int(context.args[0])
         except ValueError:
-            send_message(context, chat_id, text='There was a problem processing your input. This command accepts a whole number timeout value in seconds')
+            send_message(
+                context,
+                chat_id,
+                text="There was a problem processing your input. This command accepts a whole number timeout value in seconds",
+            )
             return
 
-        user['timeout'] = timeout
-        send_message(context, chat_id, text='Ping timeout successfully set to {} seconds.'.format(timeout))
+        user["timeout"] = timeout
+        send_message(
+            context,
+            chat_id,
+            text="Ping timeout successfully set to {} seconds.".format(timeout),
+        )
 
     else:
         try:
-            timeout = user['timeout']
+            timeout = user["timeout"]
         except KeyError:
             timeout = DEFAULT_PING_TIMEOUT
-        send_message(context, chat_id, text='Timeout currently set for {} seconds.'.format(timeout))
+        send_message(
+            context,
+            chat_id,
+            text="Timeout currently set for {} seconds.".format(timeout),
+        )
+
 
 def unsubscribe(update: Update, context: CallbackContext):
     chat_id = update.effective_chat.id
-    user = context.bot_data['chats'].setdefault(chat_id, new_user())
+    user = context.bot_data["chats"].setdefault(chat_id, new_user())
 
-    if len(user['nodes']) == 0:
+    if len(user["nodes"]) == 0:
         send_message(context, chat_id, text="You weren't subscribed to any updates.")
     else:
-        if context.args and context.args[0] == 'all':
+        if context.args and context.args[0] == "all":
             for net in NETWORKS:
-                user['nodes'][net] = []
-            send_message(context, chat_id, text='You have been unsubscribed from all updates')
+                user["nodes"][net] = []
+            send_message(
+                context, chat_id, text="You have been unsubscribed from all updates"
+            )
 
         elif context.args:
             removed_nodes = []
-            net = user['net']
-            subbed_nodes = user['nodes'][net]
+            net = user["net"]
+            subbed_nodes = user["nodes"][net]
             for node in context.args:
                 try:
                     subbed_nodes.remove(int(node))
@@ -533,12 +648,24 @@ def unsubscribe(update: Update, context: CallbackContext):
                 except ValueError:
                     pass
             if removed_nodes:
-                send_message(context, chat_id, text='You have been unsubscribed from node' + format_list(removed_nodes))
+                send_message(
+                    context,
+                    chat_id,
+                    text="You have been unsubscribed from node"
+                    + format_list(removed_nodes),
+                )
             else:
-                send_message(context, chat_id, text='No valid and subscribed node ids found.')
+                send_message(
+                    context, chat_id, text="No valid and subscribed node ids found."
+                )
 
         else:
-            send_message(context, chat_id, text='Please write "/unsubscribe all" if you wish to remove all subscribed nodes.')
+            send_message(
+                context,
+                chat_id,
+                text='Please write "/unsubscribe all" if you wish to remove all subscribed nodes.',
+            )
+
 
 def violations(update: Update, context: CallbackContext):
     chat_id = update.effective_chat.id
@@ -551,13 +678,21 @@ def violations(update: Update, context: CallbackContext):
                 node_ids.append(int(arg))
             using_subs = False
         except ValueError:
-            send_message(context, chat_id, text='There was a problem processing your input. This command accepts one or more node ids separated by a space.')
+            send_message(
+                context,
+                chat_id,
+                text="There was a problem processing your input. This command accepts one or more node ids separated by a space.",
+            )
             return
     else:
-        user = context.bot_data['chats'].setdefault(chat_id, new_user())
-        subbed_nodes = user['nodes'][user['net']]
+        user = context.bot_data["chats"].setdefault(chat_id, new_user())
+        subbed_nodes = user["nodes"][user["net"]]
         if not subbed_nodes:
-            send_message(context, chat_id, text='No input detected and no active subscriptions. Please try again with one or more valid node ids.')
+            send_message(
+                context,
+                chat_id,
+                text="No input detected and no active subscriptions. Please try again with one or more valid node ids.",
+            )
             return
         else:
             node_ids = subbed_nodes
@@ -566,109 +701,139 @@ def violations(update: Update, context: CallbackContext):
     farmerbot_node_ids = []
     for node_id in node_ids:
         con = sqlite3.connect(args.db_file)
-        exists = con.execute('SELECT 1 FROM PowerTargetChanged WHERE node_id=?', (node_id,)).fetchone()
+        exists = con.execute(
+            "SELECT 1 FROM PowerTargetChanged WHERE node_id=?", (node_id,)
+        ).fetchone()
         if exists:
             farmerbot_node_ids.append(node_id)
 
     if not farmerbot_node_ids:
-        send_message(context, chat_id, text='None of the nodes to check appear to have used the farmerbot.')
+        send_message(
+            context,
+            chat_id,
+            text="None of the nodes to check appear to have used the farmerbot.",
+        )
         return
     else:
         if using_subs:
-            send_message(context, chat_id, text='Checking for violations...')
+            send_message(context, chat_id, text="Checking for violations...")
         else:
-            send_message(context, chat_id, text='Checking node{} for violations...'.format(format_list(farmerbot_node_ids)))
+            send_message(
+                context,
+                chat_id,
+                text="Checking node{} for violations...".format(
+                    format_list(farmerbot_node_ids)
+                ),
+            )
 
         current_period = Period()
-        text = ''
+        text = ""
         for node_id in sorted(farmerbot_node_ids):
             violations = find_violations.check_node(con, node_id, current_period)
             if violations:
-                text += format_violations(node_id, violations) + '\n'
+                text += format_violations(node_id, violations) + "\n"
         if text:
             send_message(context, chat_id, text=text)
         else:
-            send_message(context, chat_id, text='No violations found')
+            send_message(context, chat_id, text="No violations found")
+
 
 parser = argparse.ArgumentParser()
-parser.add_argument('token', help='Specify a bot token')
-parser.add_argument('-v', '--verbose', help='Verbose output', 
-                    action="store_true")
-parser.add_argument('-p', '--poll', help='Set polling frequency in seconds', 
-                    type=int, default=60)
-parser.add_argument('-t', '--test', help='Enable test feature', 
-                    action="store_true")
-parser.add_argument('-d', '--dump', help='Dump bot data', action="store_true")
-parser.add_argument('-f', '--db_file', 
-                    help='Specify file for sqlite db', type=str, default='tfchain.db')
+parser.add_argument("token", help="Specify a bot token")
+parser.add_argument("-v", "--verbose", help="Verbose output", action="store_true")
+parser.add_argument(
+    "-p", "--poll", help="Set polling frequency in seconds", type=int, default=60
+)
+parser.add_argument("-t", "--test", help="Enable test feature", action="store_true")
+parser.add_argument("-d", "--dump", help="Dump bot data", action="store_true")
+parser.add_argument(
+    "-f", "--db_file", help="Specify file for sqlite db", type=str, default="tfchain.db"
+)
 args = parser.parse_args()
 
-pickler = PicklePersistence(filename='bot_data')
+# pickler = PicklePersistence(filename='bot_data')
 
 defaults = Defaults(parse_mode=ParseMode.HTML)
-updater = Updater(token=args.token, persistence=pickler, use_context=True, defaults=defaults)
+updater = Updater(
+    token=args.token, persistence=None, use_context=True, defaults=defaults
+)
 
 dispatcher = updater.dispatcher
 
-mainnet_gql = grid3.graphql.GraphQL('https://graphql.grid.tf/graphql')
-testnet_gql = grid3.graphql.GraphQL('https://graphql.test.grid.tf/graphql')
-devnet_gql = grid3.graphql.GraphQL('https://graphql.dev.grid.tf/graphql')
+mainnet_gql = grid3.graphql.GraphQL("https://graphql.grid.tf/graphql")
+testnet_gql = grid3.graphql.GraphQL("https://graphql.test.grid.tf/graphql")
+devnet_gql = grid3.graphql.GraphQL("https://graphql.dev.grid.tf/graphql")
 
-graphqls = {'main': mainnet_gql,
-            'test': testnet_gql,
-            'dev': devnet_gql}
+graphqls = {"main": mainnet_gql, "test": testnet_gql, "dev": devnet_gql}
 
 if args.verbose:
     log_level = logging.INFO
 
-    #Force fetching the schemas when verbose so they don't dump on console
+    # Force fetching the schemas when verbose so they don't dump on console
     for gql in graphqls.values():
         gql.fetch_schema()
 else:
     log_level = logging.WARNING
 
 logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=log_level, 
-    handlers=[logging.FileHandler('logs'), logging.StreamHandler()])
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    level=log_level,
+    handlers=[logging.FileHandler("logs"), logging.StreamHandler()],
+)
 
 # Anyone commands
-dispatcher.add_handler(CommandHandler('chat_id', check_chat))
-dispatcher.add_handler(CommandHandler('network', network))
-dispatcher.add_handler(CommandHandler('net', network))
-dispatcher.add_handler(CommandHandler('ping', status_ping))
-dispatcher.add_handler(CommandHandler('start', start))
-dispatcher.add_handler(CommandHandler('help', start))
-dispatcher.add_handler(CommandHandler('status', status_gql))
-dispatcher.add_handler(CommandHandler('subscribe', subscribe))
-dispatcher.add_handler(CommandHandler('sub', subscribe))
-dispatcher.add_handler(CommandHandler('timeout', timeout))
-dispatcher.add_handler(CommandHandler('unsubscribe', unsubscribe))
-dispatcher.add_handler(CommandHandler('unsub', unsubscribe))
-dispatcher.add_handler(CommandHandler('violations', violations))
+dispatcher.add_handler(CommandHandler("chat_id", check_chat))
+dispatcher.add_handler(CommandHandler("network", network))
+dispatcher.add_handler(CommandHandler("net", network))
+dispatcher.add_handler(CommandHandler("ping", status_ping))
+dispatcher.add_handler(CommandHandler("start", start))
+dispatcher.add_handler(CommandHandler("help", start))
+dispatcher.add_handler(CommandHandler("status", status_gql))
+dispatcher.add_handler(CommandHandler("subscribe", subscribe))
+dispatcher.add_handler(CommandHandler("sub", subscribe))
+dispatcher.add_handler(CommandHandler("timeout", timeout))
+dispatcher.add_handler(CommandHandler("unsubscribe", unsubscribe))
+dispatcher.add_handler(CommandHandler("unsub", unsubscribe))
+dispatcher.add_handler(CommandHandler("violations", violations))
 
 updater.bot.delete_my_commands()
-updater.bot.set_my_commands([   
-    ('help', 'Show more details on commands and example usage.'), 
-    ('status', 'Get current status of nodes. With no input, show status for all subscribed nodes.'),
-    ('violations', 'Check if node has any farmerbot violations. With no input, shows a report for subscribed nodes.'),
-    ('subscribe', 'Start alerts for one or more nodes. With no input, shows currently subscribed nodes.'),
-    ('unsubscribe', 'Stop alerts for one or more nodes. Use "/unsubscribe all" to stop all alerts.'),
-    ('network', 'Change the network to "dev", "test", or "main"')
-    ])
+updater.bot.set_my_commands(
+    [
+        ("help", "Show more details on commands and example usage."),
+        (
+            "status",
+            "Get current status of nodes. With no input, show status for all subscribed nodes.",
+        ),
+        (
+            "violations",
+            "Check if node has any farmerbot violations. With no input, shows a report for subscribed nodes.",
+        ),
+        (
+            "subscribe",
+            "Start alerts for one or more nodes. With no input, shows currently subscribed nodes.",
+        ),
+        (
+            "unsubscribe",
+            'Stop alerts for one or more nodes. Use "/unsubscribe all" to stop all alerts.',
+        ),
+        ("network", 'Change the network to "dev", "test", or "main"'),
+    ]
+)
 
 if args.test:
     import json
+
     get_nodes = get_nodes_from_file
 
 if args.dump:
-    print('Bot data:')
+    print("Bot data:")
     print(dispatcher.bot_data)
     print()
 
 initialize(dispatcher.bot_data)
 migrate_data(dispatcher.bot_data)
 populate_violations(dispatcher.bot_data)
-updater.job_queue.run_repeating(check_job, interval=args.poll, first=1)
+# updater.job_queue.run_repeating(check_job, interval=args.poll, first=1)
 
 updater.start_polling()
 updater.idle()
