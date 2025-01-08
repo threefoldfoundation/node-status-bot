@@ -56,9 +56,19 @@ By default, the bot also looks in the current directory for a database file `tfc
 
 Then go say hi to your bot on Telegram and try some commands.
 
+### Database Setup
+
+The bot uses rqlite for storing chat and node data. You can run a single-node rqlite cluster in Docker with:
+
+```bash
+docker run -d --name rqlite-node -p 4001:4001 rqlite/rqlite
+```
+
+This will start rqlite and expose it on port 4001, which is the default port the bot expects.
+
 ### Operation
 
-For best results, bot the ingester and the bot should run under a process manager that can restart them if they exit for any reason. Nothing special is neede here really `zinit`, `systemd`, or other solutions will work fine. Just create basic unit/service files with the same commands shown above. Docker can be used for this purpose too.
+For best results, both the ingester and the bot should run under a process manager that can restart them if they exit for any reason. Nothing special is needed here really - `zinit`, `systemd`, or other solutions will work fine. Just create basic unit/service files with the same commands shown above. Docker can be used for this purpose too.
 
 ## Bugs and support
 
