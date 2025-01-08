@@ -135,6 +135,26 @@ class RqliteDB:
                 }
             return None
 
+    def create_node(self, node: Dict[str, Any], network: str):
+        with self.conn.cursor() as cursor:
+            cursor.execute(
+                """
+                INSERT OR IGNORE INTO nodes
+                (node_id, network, status, updated_at,
+                 power_state, power_target, farmerbot)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+                (
+                    node["nodeId"],
+                    network,
+                    node["status"],
+                    node["updatedAt"],
+                    node["power"]["state"],
+                    node["power"]["target"],
+                    node.get("farmerbot", False),
+                ),
+            )
+
     def update_node(self, node: Dict[str, Any], network: str):
         with self.conn.cursor() as cursor:
             cursor.execute(
