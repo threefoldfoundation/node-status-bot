@@ -596,26 +596,23 @@ def timeout(update: Update, context: CallbackContext):
     if context.args:
         try:
             timeout = int(context.args[0])
+            if timeout <= 0:
+                raise ValueError("Timeout must be positive")
+                
+            db.set_chat_timeout(chat_id, timeout)
+            send_message(
+                context,
+                chat_id,
+                text="Ping timeout successfully set to {} seconds.".format(timeout),
+            )
         except ValueError:
             send_message(
                 context,
                 chat_id,
-                text="There was a problem processing your input. This command accepts a whole number timeout value in seconds",
+                text="There was a problem processing your input. This command accepts a positive whole number timeout value in seconds",
             )
-            return
-
-        user["timeout"] = timeout
-        send_message(
-            context,
-            chat_id,
-            text="Ping timeout successfully set to {} seconds.".format(timeout),
-        )
-
     else:
-        try:
-            timeout = user["timeout"]
-        except KeyError:
-            timeout = DEFAULT_PING_TIMEOUT
+        timeout = db.get_chat_timeout(chat_id)
         send_message(
             context,
             chat_id,

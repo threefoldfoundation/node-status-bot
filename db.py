@@ -22,7 +22,8 @@ class RqliteDB:
         queries = [
             """CREATE TABLE IF NOT EXISTS chats (
                 chat_id INTEGER PRIMARY KEY,
-                net TEXT NOT NULL DEFAULT 'main'
+                net TEXT NOT NULL DEFAULT 'main',
+                timeout INTEGER DEFAULT 10
             )""",
             """CREATE TABLE IF NOT EXISTS nodes (
                 node_id INTEGER,
@@ -267,3 +268,25 @@ class RqliteDB:
             )
             row = cursor.fetchone()
             return row[0] if row else "main"
+
+    def get_chat_timeout(self, chat_id: int) -> int:
+        """Get the timeout setting for a chat"""
+        with self.conn.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT timeout FROM chats WHERE chat_id = ?
+                """,
+                (chat_id,),
+            )
+            row = cursor.fetchone()
+            return row[0] if row else 10
+
+    def set_chat_timeout(self, chat_id: int, timeout: int) -> None:
+        """Set the timeout setting for a chat"""
+        with self.conn.cursor() as cursor:
+            cursor.execute(
+                """
+                UPDATE chats SET timeout = ? WHERE chat_id = ?
+                """,
+                (timeout, chat_id),
+            )
