@@ -320,12 +320,6 @@ def get_violations(con, node_id, periods):
 def initialize(bot_data):
     bot_data["db"] = RqliteDB()
 
-    for key in ["nodes"]:
-        bot_data.setdefault(key, {})
-
-    for net in NETWORKS:
-        bot_data["nodes"].setdefault(net, {})
-
 
 def network(update: Update, context: CallbackContext):
     chat_id = update.effective_chat.id
@@ -347,8 +341,6 @@ def network(update: Update, context: CallbackContext):
         send_message(context, chat_id, text="Network is set to {}net".format(net))
 
 
-def new_user():
-    return {"nodes": {"main": [], "test": [], "dev": []}}
 
 
 def node_used_farmerbot(con, node_id):
@@ -453,9 +445,10 @@ This bot is developed and operated on a best effort basis. Only you are responsi
 
 def status_gql(update: Update, context: CallbackContext):
     chat_id = update.effective_chat.id
-    user = context.bot_data["chats"].setdefault(chat_id, new_user())
+    db = context.bot_data["db"]
 
-    net = user["net"]
+    # Get current network for this chat
+    net = db.get_chat_network(chat_id)
 
     if context.args:
         try:
@@ -476,7 +469,7 @@ def status_gql(update: Update, context: CallbackContext):
             )
 
     else:
-        subbed_nodes = user["nodes"][net]
+        subbed_nodes = db.get_subscribed_nodes(chat_id, net)
 
         if subbed_nodes:
             up, down, standby = [], [], []
