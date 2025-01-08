@@ -10,6 +10,12 @@ class RqliteDB:
             port=port,
         )
         self._init_db()
+        self._enable_foreign_keys()
+
+    def _enable_foreign_keys(self):
+        """Enable foreign key constraints for SQLite"""
+        with self.conn.cursor() as cursor:
+            cursor.execute("PRAGMA foreign_keys = ON")
 
     def _init_db(self):
         """Initialize database schema"""
