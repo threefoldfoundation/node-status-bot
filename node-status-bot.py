@@ -364,23 +364,19 @@ def populate_violations(bot_data):
     if bot_data.setdefault("violations_populated", False):
         return
 
-    # We only track violations for mainnet
-    nodes = bot_data["nodes"]["main"]
-
+    db = bot_data["db"]
     con, periods = get_con_and_periods()
 
-    for node_id, node in nodes.items():
+    # Get all nodes that have ever been in standby (managed by farmerbot)
+    with con.cursor() as cursor:
+        cursor.execute("SELECT DISTINCT node_id FROM PowerStateChanged WHERE state='Down'")
+        farmerbot_nodes = [row[0] for row in cursor.fetchall()]
+
+    # For each farmerbot-managed node, check for existing violations and store them
+    for node_id in farmerbot_nodes:
         violations = get_violations(con, node_id, periods)
-        # Violations are uniquely identified per node by their first field (time that wake up was initiated). Storing them in this form helps to easily identify new violations later
-        node.violations = {v.boot_requested: v for v in violations}
-        try:
-            if violations or node.status == "standby":
-                node.farmerbot = True
-            else:
-                node.farmerbot = False
-        # It's possible when migrating from old style bot data that some node objects don't have a status field
-        except AttributeError:
-            node.farmerbot = False
+        for violation in violations:
+            db.add_violation(node_id, "main", violation)
 
     bot_data["violations_populated"] = True
 
