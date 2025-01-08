@@ -327,18 +327,6 @@ def initialize(bot_data):
         bot_data["nodes"].setdefault(net, {})
 
 
-def migrate_data(bot_data):
-    """
-    Convert dict based node data to instances of Node class. Only needed when updating a bot that has existing data using the old style.
-    """
-    for net in NETWORKS:
-        nodes = bot_data["nodes"][net]
-        for node_id in nodes.keys():
-            if type(nodes[node_id]) is dict:
-                nodes[node_id]["nodeID"] = node_id
-                nodes[node_id] = Node(nodes[node_id])
-
-
 def network(update: Update, context: CallbackContext):
     chat_id = update.effective_chat.id
     db = context.bot_data["db"]
@@ -870,9 +858,8 @@ if args.dump:
     print()
 
 initialize(dispatcher.bot_data)
-migrate_data(dispatcher.bot_data)
 populate_violations(dispatcher.bot_data)
-# updater.job_queue.run_repeating(check_job, interval=args.poll, first=1)
+updater.job_queue.run_repeating(check_job, interval=args.poll, first=1)
 
 updater.start_polling()
 updater.idle()
