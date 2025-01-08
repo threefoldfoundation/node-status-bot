@@ -375,8 +375,8 @@ def populate_violations(bot_data):
     # For each farmerbot-managed node, check for existing violations and store them
     for node_id in farmerbot_nodes:
         violations = get_violations(con, node_id, periods)
-        for violation in violations:
-            db.add_violation(node_id, "main", violation)
+        if violations:
+            db.add_violations(node_id, "main", violations)
 
     bot_data["violations_populated"] = True
 

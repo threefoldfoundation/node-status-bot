@@ -207,21 +207,29 @@ class RqliteDB:
             }
 
     def add_violation(self, node_id: int, network: str, violation: Dict[str, Any]):
+        """Add a single violation (kept for backward compatibility)"""
+        self.add_violations(node_id, network, [violation])
+
+    def add_violations(self, node_id: int, network: str, violations: List[Dict[str, Any]]):
+        """Add multiple violations in a single request"""
         with self.conn.cursor() as cursor:
-            cursor.execute(
+            cursor.executemany(
                 """
                 INSERT OR REPLACE INTO violations
                 (node_id, network, boot_requested, booted_at, end_time, finalized)
                 VALUES (?, ?, ?, ?, ?, ?)
             """,
-                (
-                    node_id,
-                    network,
-                    violation["boot_requested"],
-                    violation["booted_at"],
-                    violation["end_time"],
-                    violation["finalized"],
-                ),
+                [
+                    (
+                        node_id,
+                        network,
+                        v["boot_requested"],
+                        v["booted_at"],
+                        v["end_time"],
+                        v["finalized"],
+                    )
+                    for v in violations
+                ],
             )
 
     def get_all_subscribed_nodes(self) -> List[Tuple[int, List[int]]]:
