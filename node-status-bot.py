@@ -492,10 +492,7 @@ def status_ping(update: Update, context: CallbackContext):
     """
     Get the node status using a ping.
     """
-
     chat_id = update.effective_chat.id
-    user = context.bot_data["chats"].setdefault(chat_id, new_user())
-
     send_message(context, chat_id, text="Ping is disabled for now.")
     return
 
@@ -594,7 +591,7 @@ def timeout(update: Update, context: CallbackContext):
     Sets a custom ping timeout for the user.
     """
     chat_id = update.effective_chat.id
-    user = context.bot_data["chats"].setdefault(chat_id, new_user())
+    db = context.bot_data["db"]
 
     if context.args:
         try:
@@ -701,8 +698,9 @@ def violations(update: Update, context: CallbackContext):
             )
             return
     else:
-        user = context.bot_data["chats"].setdefault(chat_id, new_user())
-        subbed_nodes = user["nodes"][user["net"]]
+        db = context.bot_data["db"]
+        net = db.get_chat_network(chat_id)
+        subbed_nodes = db.get_subscribed_nodes(chat_id, net)
         if not subbed_nodes:
             send_message(
                 context,
