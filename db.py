@@ -216,13 +216,7 @@ class RqliteDB:
                 """
                 SELECT net FROM chats WHERE chat_id = ?
                 """,
-                (chat_id,)
+                (chat_id,),
             )
             row = cursor.fetchone()
-            return row[0] if row else 'main'
-
-    def get_all_chats(self) -> List[int]:
-        """Get list of all chat IDs in the database"""
-        with self.conn.cursor() as cursor:
-            cursor.execute("SELECT chat_id FROM chats")
-            return [row[0] for row in cursor.fetchall()]
+            return row[0] if row else "main"
