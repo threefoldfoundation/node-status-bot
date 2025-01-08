@@ -417,7 +417,6 @@ def start(update: Update, context: CallbackContext):
     chat_id = update.effective_chat.id
     db = context.bot_data["db"]
     db.create_chat(chat_id)
-    context.bot_data["chats"].setdefault(chat_id, new_user())
     msg = """
 Hey there,
 
