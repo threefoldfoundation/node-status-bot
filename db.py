@@ -1,6 +1,6 @@
 from typing import Any, Dict, List, Tuple
 
-import rqlite
+import pyrqlite.dbapi2 as rqlite
 
 
 class RqliteDB:
