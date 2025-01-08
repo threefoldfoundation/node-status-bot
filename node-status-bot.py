@@ -509,13 +509,13 @@ def status_ping(update: Update, context: CallbackContext):
 def subscribe(update: Update, context: CallbackContext):
     chat_id = update.effective_chat.id
     db = context.bot_data["db"]
-    
+
     # Get current network for this chat
     net = db.get_chat_network(chat_id)
-    
+
     # Get currently subscribed nodes
     current_subs = db.get_subscribed_nodes(chat_id, net)
-    
+
     node_ids = []
     if context.args:
         try:
@@ -544,12 +544,16 @@ def subscribe(update: Update, context: CallbackContext):
         # Get node data for new subscriptions
         new_ids = [n for n in node_ids if n not in current_subs]
         new_nodes = {node.nodeId: node for node in get_nodes(net, new_ids)}
-        
+
         if new_nodes:
-            # Add new subscriptions to database
+            # Add nodes to database first
+            for node_id, node in new_nodes.items():
+                db.create_node(node, net)
+
+            # Then add subscriptions
             for node_id in new_nodes:
                 db.add_subscription(chat_id, net, node_id)
-            
+
             # Update in-memory node data
             known_nodes = context.bot_data["nodes"][net]
             unknown_nodes = new_nodes.keys() - known_nodes.keys()
@@ -565,9 +569,11 @@ def subscribe(update: Update, context: CallbackContext):
             known_nodes.update(new_nodes)
             new_subs = [n for n in node_ids if n in new_nodes]
         else:
-            text = "No valid node ids found to add."
+            text = "No valid node ids found to add. Either the nodes don't exist or you were already subscribed to them."
             if current_subs:
-                text += " You are currently subscribed to node" + format_list(current_subs)
+                text += " You are currently subscribed to node" + format_list(
+                    current_subs
+                )
             send_message(context, chat_id, text=text)
             return
 
@@ -630,13 +636,13 @@ def timeout(update: Update, context: CallbackContext):
 def unsubscribe(update: Update, context: CallbackContext):
     chat_id = update.effective_chat.id
     db = context.bot_data["db"]
-    
+
     # Get current network for this chat
     net = db.get_chat_network(chat_id)
-    
+
     # Get currently subscribed nodes
     current_subs = db.get_subscribed_nodes(chat_id, net)
-    
+
     if not current_subs:
         send_message(context, chat_id, text="You weren't subscribed to any updates.")
         return
@@ -658,12 +664,13 @@ def unsubscribe(update: Update, context: CallbackContext):
                     removed_nodes.append(node_id)
             except ValueError:
                 pass
-                
+
         if removed_nodes:
             send_message(
                 context,
                 chat_id,
-                text="You have been unsubscribed from node" + format_list(removed_nodes),
+                text="You have been unsubscribed from node"
+                + format_list(removed_nodes),
             )
         else:
             send_message(

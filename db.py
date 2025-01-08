@@ -149,9 +149,9 @@ class RqliteDB:
                     network,
                     node.status,
                     node.updatedAt,
-                    node.power.state,
-                    node.power.target,
-                    getattr(node, 'farmerbot', False),
+                    node.power["state"],
+                    node.power["target"],
+                    getattr(node, "farmerbot", False),
                 ),
             )
 
@@ -169,9 +169,9 @@ class RqliteDB:
                     network,
                     node.status,
                     node.updatedAt,
-                    node.power.state,
-                    node.power.target,
-                    getattr(node, 'farmerbot', False),
+                    node.power["state"],
+                    node.power["target"],
+                    getattr(node, "farmerbot", False),
                 ),
             )
 
