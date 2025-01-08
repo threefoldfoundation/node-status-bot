@@ -39,23 +39,26 @@ def check_job(context: CallbackContext):
     """
     The main attraction. This function collects all the node ids that have an active subscription, checks their status, then sends alerts to users whose nodes have a status change.
     """
+    db = context.bot_data["db"]
     con, periods = get_con_and_periods()
 
     for net in NETWORKS:
-        # First gather all actively subscribed nodes and note who is subscribed
         try:
-            subbed_nodes = {}
-
-            for chat_id, data in context.bot_data["chats"].items():
-                for node_id in data["nodes"][net]:
-                    subbed_nodes.setdefault(node_id, []).append(chat_id)
-            updates = get_nodes(net, subbed_nodes)
+            # Get all subscribed nodes and their chat subscriptions
+            subscribed_nodes = db.get_all_subscribed_nodes()
+            
+            # Convert to format: {node_id: [chat_ids]}
+            subbed_nodes = {node_id: chat_ids for node_id, chat_ids in subscribed_nodes}
+            
+            # Get current node statuses
+            updates = get_nodes(net, subbed_nodes.keys())
 
             if net == "main":
-                farmerbot_nodes = [n for n in subbed_nodes]
+                # Check for violations only on mainnet
                 all_violations = {}
-                for node_id in farmerbot_nodes:
-                    all_violations[node_id] = get_violations(con, node_id, periods)
+                for node_id in subbed_nodes.keys():
+                    violations = get_violations(con, node_id, periods)
+                    all_violations[node_id] = violations
 
         except:
             logging.exception("Error fetching node data for check")
@@ -63,95 +66,96 @@ def check_job(context: CallbackContext):
 
         for update in updates:
             try:
-                node = context.bot_data["nodes"][net][update.nodeId]
+                # Get current node state from database
+                node_data = db.get_node(update.nodeId, net)
+                if not node_data:
+                    # New node, create initial record
+                    db.create_node(update, net)
+                    node_data = db.get_node(update.nodeId, net)
 
-                if node.power["target"] == "Down" and update.power["target"] == "Up":
-                    for chat_id in subbed_nodes[node.nodeId]:
+                # Check for status changes
+                if node_data["power"]["target"] == "Down" and update.power["target"] == "Up":
+                    for chat_id in subbed_nodes[update.nodeId]:
                         send_message(
                             context,
                             chat_id,
                             text="Node {} wake up initiated \N{HOT BEVERAGE}".format(
-                                node.nodeId
+                                update.nodeId
                             ),
                         )
 
-                if node.status == "up" and update.status == "down":
-                    for chat_id in subbed_nodes[node.nodeId]:
+                if node_data["status"] == "up" and update.status == "down":
+                    for chat_id in subbed_nodes[update.nodeId]:
                         send_message(
                             context,
                             chat_id,
                             text="Node {} has gone offline \N{WARNING SIGN}".format(
-                                node.nodeId
+                                update.nodeId
                             ),
                         )
 
-                elif node.status == "up" and update.status == "standby":
-                    for chat_id in subbed_nodes[node.nodeId]:
+                elif node_data["status"] == "up" and update.status == "standby":
+                    for chat_id in subbed_nodes[update.nodeId]:
                         send_message(
                             context,
                             chat_id,
                             text="Node {} has gone to sleep \N{LAST QUARTER MOON WITH FACE}".format(
-                                node.nodeId
+                                update.nodeId
                             ),
                         )
 
-                elif node.status == "standby" and update.status == "down":
-                    for chat_id in subbed_nodes[node.nodeId]:
+                elif node_data["status"] == "standby" and update.status == "down":
+                    for chat_id in subbed_nodes[update.nodeId]:
                         send_message(
                             context,
                             chat_id,
                             text="Node {} did not wake up within 24 hours \N{WARNING SIGN}".format(
-                                node.nodeId
+                                update.nodeId
                             ),
                         )
 
-                elif node.status in ("down", "standby") and update.status == "up":
-                    for chat_id in subbed_nodes[node.nodeId]:
+                elif node_data["status"] in ("down", "standby") and update.status == "up":
+                    for chat_id in subbed_nodes[update.nodeId]:
                         send_message(
                             context,
                             chat_id,
                             text="Node {} has come online \N{ELECTRIC LIGHT BULB}".format(
-                                node.nodeId
+                                update.nodeId
                             ),
                         )
 
-                # We track which nodes have ever been managed by farmerbot, since those are the only ones that can get violations and scanning for violations is a relatively expensive operation
-                if node.status == "standby" or update.status == "standby":
-                    node.farmerbot = True
+                # Update node status in database
+                db.update_node(update, net)
 
-                if node.nodeId in all_violations:
-                    violations = all_violations[node.nodeId]
-                    for v in violations:
-                        if v.boot_requested not in node.violations:
-                            if v.finalized:
-                                for chat_id in subbed_nodes[node.nodeId]:
+                # Check for new violations
+                if update.nodeId in all_violations:
+                    existing_violations = node_data["violations"]
+                    for violation in all_violations[update.nodeId]:
+                        if violation["boot_requested"] not in existing_violations:
+                            if violation["finalized"]:
+                                for chat_id in subbed_nodes[update.nodeId]:
                                     send_message(
                                         context,
                                         chat_id,
                                         text="🚨 Farmerbot violation detected for node {}. Node failed to boot within 30 minutes 🚨\n\n{}".format(
-                                            node.nodeId, format_violation(v)
+                                            update.nodeId, format_violation(violation)
                                         ),
                                     )
-                            elif v.end_time - v.boot_requested > BOOT_TOLERANCE:
-                                for chat_id in subbed_nodes[node.nodeId]:
+                            elif violation["end_time"] - violation["boot_requested"] > BOOT_TOLERANCE:
+                                for chat_id in subbed_nodes[update.nodeId]:
                                     send_message(
                                         context,
                                         chat_id,
                                         text="🚨 Probable farmerbot violation detected for node {}. Node appears to have not booted within 30 minutes of boot request. Check again with /violations after node boots 🚨\n\n{}".format(
-                                            node.nodeId, format_violation(v)
+                                            update.nodeId, format_violation(violation)
                                         ),
                                     )
 
-                        # We do this every time because information about when a node finally booted might become available later. Right now we don't use this info though. Might be effective as a cache for manual violation lookups
-                        node.violations[v.boot_requested] = v
+                            # Add new violation to database
+                            db.add_violation(update.nodeId, net, violation)
 
             except:
                 logging.exception("Error in alert block")
-
-            finally:
-                node.status = update.status
-                node.updatedAt = update.updatedAt
-                node.power = update.power
 
 
 def format_list(items):
