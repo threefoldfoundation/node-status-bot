@@ -352,11 +352,12 @@ def node_used_farmerbot(con, node_id):
 
 
 def populate_violations(bot_data):
-    # Since we only want to notify users about _new_ violations, we need to establish a baseline at some point (when the feature is enabled or when a new bot is started for the first time)
-    if bot_data.setdefault("violations_populated", False):
+    db = bot_data["db"]
+    
+    # Check if violations have already been populated
+    if db.get_metadata("violations_populated") == "true":
         return
 
-    db = bot_data["db"]
     con, periods = get_con_and_periods()
 
     # Get all nodes that have ever been in standby (managed by farmerbot)
@@ -370,7 +371,8 @@ def populate_violations(bot_data):
         if violations:
             db.add_violations(node_id, "main", violations)
 
-    bot_data["violations_populated"] = True
+    # Mark violations as populated
+    db.set_metadata("violations_populated", "true")
 
 
 def send_message(context, chat_id, text):

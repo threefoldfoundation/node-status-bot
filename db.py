@@ -53,6 +53,10 @@ class RqliteDB:
                 PRIMARY KEY (node_id, network, boot_requested),
                 FOREIGN KEY (node_id, network) REFERENCES nodes(node_id, network)
             )""",
+            """CREATE TABLE IF NOT EXISTS metadata (
+                key TEXT PRIMARY KEY,
+                value TEXT
+            )""",
         ]
 
         with self.conn.cursor() as cursor:
@@ -268,6 +272,29 @@ class RqliteDB:
             )
             row = cursor.fetchone()
             return row[0] if row else "main"
+
+    def get_metadata(self, key: str) -> str:
+        """Get metadata value by key"""
+        with self.conn.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT value FROM metadata WHERE key = ?
+                """,
+                (key,),
+            )
+            row = cursor.fetchone()
+            return row[0] if row else None
+
+    def set_metadata(self, key: str, value: str) -> None:
+        """Set metadata value by key"""
+        with self.conn.cursor() as cursor:
+            cursor.execute(
+                """
+                INSERT OR REPLACE INTO metadata (key, value)
+                VALUES (?, ?)
+                """,
+                (key, value),
+            )
 
     def get_chat_timeout(self, chat_id: int) -> int:
         """Get the timeout setting for a chat"""
