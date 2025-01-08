@@ -4,8 +4,8 @@ import pyrqlite.dbapi2 as rqlite
 
 
 class RqliteDB:
-    def __init__(self, host: str = "localhost:4001"):
-        self.conn = rqlite.connect(host)
+    def __init__(self, host: str = "localhost", port: int = 4001):
+        self.conn = rqlite.connect(host=host, port=port)
         self._init_db()
 
     def _init_db(self):
