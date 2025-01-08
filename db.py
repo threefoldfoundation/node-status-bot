@@ -24,14 +24,6 @@ class RqliteDB:
                 chat_id INTEGER PRIMARY KEY,
                 net TEXT NOT NULL DEFAULT 'main'
             )""",
-            """CREATE TABLE IF NOT EXISTS subscriptions (
-                chat_id INTEGER,
-                network TEXT,
-                node_id INTEGER,
-                PRIMARY KEY (chat_id, network, node_id),
-                FOREIGN KEY (chat_id) REFERENCES chats(chat_id),
-                FOREIGN KEY (node_id, network) REFERENCES nodes(node_id, network)
-            )""",
             """CREATE TABLE IF NOT EXISTS nodes (
                 node_id INTEGER,
                 network TEXT,
@@ -41,6 +33,14 @@ class RqliteDB:
                 power_target TEXT,
                 farmerbot BOOLEAN DEFAULT FALSE,
                 PRIMARY KEY (node_id, network)
+            )""",
+            """CREATE TABLE IF NOT EXISTS subscriptions (
+                chat_id INTEGER,
+                network TEXT,
+                node_id INTEGER,
+                PRIMARY KEY (chat_id, network, node_id),
+                FOREIGN KEY (chat_id) REFERENCES chats(chat_id),
+                FOREIGN KEY (node_id, network) REFERENCES nodes(node_id, network)
             )""",
             """CREATE TABLE IF NOT EXISTS violations (
                 node_id INTEGER,

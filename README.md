@@ -58,10 +58,12 @@ Then go say hi to your bot on Telegram and try some commands.
 
 ### Database Setup
 
-The bot uses rqlite for storing chat and node data. You can run a single-node rqlite cluster in Docker with:
+The bot uses rqlite for storing chat and node data. To make sure that foreign key constraints work properly, be sure to start rqlite with the `-fk` flag.
+
+You can run a single-node rqlite cluster in Docker with:
 
 ```bash
-docker run -d --name rqlite-node -p 4001:4001 rqlite/rqlite
+docker run -d --name rqlite-node -p 4001:4001 rqlite/rqlite -fk
 ```
 
 This will start rqlite and expose it on port 4001, which is the default port the bot expects.
