@@ -92,23 +92,33 @@ class RqliteDB:
             )
 
     def add_subscription(self, chat_id: int, network: str, node_id: int):
+        """Add a single subscription (kept for backward compatibility)"""
+        self.add_subscriptions(chat_id, network, [node_id])
+
+    def add_subscriptions(self, chat_id: int, network: str, node_ids: List[int]):
+        """Add multiple subscriptions in a single request"""
         with self.conn.cursor() as cursor:
-            cursor.execute(
+            cursor.executemany(
                 """
                 INSERT OR IGNORE INTO subscriptions (chat_id, network, node_id)
                 VALUES (?, ?, ?)
             """,
-                (chat_id, network, node_id),
+                [(chat_id, network, node_id) for node_id in node_ids],
             )
 
     def remove_subscription(self, chat_id: int, network: str, node_id: int):
+        """Remove a single subscription (kept for backward compatibility)"""
+        self.remove_subscriptions(chat_id, network, [node_id])
+
+    def remove_subscriptions(self, chat_id: int, network: str, node_ids: List[int]):
+        """Remove multiple subscriptions in a single request"""
         with self.conn.cursor() as cursor:
-            cursor.execute(
+            cursor.executemany(
                 """
                 DELETE FROM subscriptions
                 WHERE chat_id = ? AND network = ? AND node_id = ?
             """,
-                (chat_id, network, node_id),
+                [(chat_id, network, node_id) for node_id in node_ids],
             )
 
     def get_node(self, node_id: int, network: str) -> Dict[str, Any]:

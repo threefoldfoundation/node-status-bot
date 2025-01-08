@@ -550,9 +550,8 @@ def subscribe(update: Update, context: CallbackContext):
             for node_id, node in new_nodes.items():
                 db.create_node(node, net)
 
-            # Then add subscriptions
-            for node_id in new_nodes:
-                db.add_subscription(chat_id, net, node_id)
+            # Add all subscriptions in one go
+            db.add_subscriptions(chat_id, net, list(new_nodes.keys()))
 
             # Update in-memory node data
             known_nodes = context.bot_data["nodes"][net]
@@ -658,14 +657,18 @@ def unsubscribe(update: Update, context: CallbackContext):
         )
     elif context.args:
         removed_nodes = []
+        node_ids = []
         for node in context.args:
             try:
                 node_id = int(node)
                 if node_id in current_subs:
-                    db.remove_subscription(chat_id, net, node_id)
+                    node_ids.append(node_id)
                     removed_nodes.append(node_id)
             except ValueError:
                 pass
+        
+        if node_ids:
+            db.remove_subscriptions(chat_id, net, node_ids)
 
         if removed_nodes:
             send_message(
