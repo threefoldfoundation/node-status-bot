@@ -1,7 +1,7 @@
 from typing import Any, Dict, List, Tuple
-from dataclasses import asdict
 
 import pyrqlite.dbapi2 as dbapi2
+
 from find_violations import Violation
 
 
@@ -152,6 +152,32 @@ class RqliteDB:
                 }
             return None
 
+    def get_nodes(self, network: str) -> List[Dict[str, Any]]:
+        with self.conn.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT node_id, network, status, updated_at,
+                       power_state, power_target, farmerbot
+                FROM nodes
+                WHERE network = ?
+            """,
+                (network,),
+            )
+
+            nodes = []
+            for row in cursor.fetchall():
+                nodes.append(
+                    {
+                        "nodeId": row[0],
+                        "status": row[2],
+                        "updatedAt": row[3],
+                        "power": {"state": row[4], "target": row[5]},
+                        "farmerbot": bool(row[6]),
+                        "violations": self.get_node_violations(row[0], network),
+                    }
+                )
+            return nodes
+
     def create_node(self, node, network: str):
         with self.conn.cursor() as cursor:
             cursor.execute(
@@ -209,7 +235,7 @@ class RqliteDB:
                     boot_requested=row[0],
                     booted_at=row[1],
                     end_time=row[2],
-                    finalized=bool(row[3])
+                    finalized=bool(row[3]),
                 )
                 for row in cursor.fetchall()
             }
