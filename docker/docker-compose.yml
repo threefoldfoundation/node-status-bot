@@ -8,8 +8,6 @@ services:
       -bootstrap-expect 3
       -join rqlite1:4002,rqlite2:4002,rqlite3:4002
       /rqlite/file/data
-    environment:
-      - RQLITE_BOOTSTRAP_EXPECT=3
     volumes:
       - rqlite1-data:/rqlite/file/data
     networks:
@@ -24,8 +22,6 @@ services:
       -bootstrap-expect 3
       -join rqlite1:4002,rqlite2:4002,rqlite3:4002
       /rqlite/file/data
-    environment:
-      - RQLITE_BOOTSTRAP_EXPECT=3
     volumes:
       - rqlite2-data:/rqlite/file/data
     networks:
@@ -40,8 +36,6 @@ services:
       -bootstrap-expect 3
       -join rqlite1:4002,rqlite2:4002,rqlite3:4002
       /rqlite/file/data
-    environment:
-      - RQLITE_BOOTSTRAP_EXPECT=3
     volumes:
       - rqlite3-data:/rqlite/file/data
     networks:

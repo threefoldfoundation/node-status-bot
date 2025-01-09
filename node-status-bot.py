@@ -8,7 +8,6 @@ from datetime import datetime
 
 import grid3.graphql
 import telegram
-from ingester import prep_db
 from gql import gql
 from grid3.minting.period import Period
 from grid3.types import Node
@@ -22,6 +21,7 @@ from telegram.ext import (
 
 import find_violations
 from db import RqliteDB
+from ingester import prep_db
 
 # Technically Telegram supports messages up to 4096 characters, beyond which an
 # error is returned. However in my experience, messages longer than 3800 chars
@@ -323,7 +323,7 @@ def get_violations(con, node_id, periods):
 def is_leader_valid(leader_info):
     if not leader_info:
         return False
-        
+
     try:
         leader_id, last_heartbeat = leader_info.split(":")
         last_heartbeat = float(last_heartbeat)
@@ -347,7 +347,7 @@ def get_leader(db):
         logging.exception("Failed to get leader")
         return None
 
-def initialize(bot_data):
+def initialize_dbs(bot_data):
     # Initialize SQLite database if it doesn't exist
     if not os.path.exists(args.db_file):
         logging.info(f"Creating new database at {args.db_file}")
@@ -356,21 +356,6 @@ def initialize(bot_data):
         con.close()
 
     bot_data["db"] = RqliteDB(host=args.rqlite_host, port=args.rqlite_port)
-    
-    while True:
-        leader_info = get_leader(bot_data["db"])
-        
-        if not leader_info or not is_leader_valid(leader_info):
-            # Try to become leader
-            if update_leader(bot_data["db"]):
-                break
-                
-        # Wait and check again
-        time.sleep(args.heartbeat_interval)
-        
-    # We're now the leader
-    logging.info(f"Node {args.node_id} is now the leader")
-
 
 def network(update: Update, context: CallbackContext):
     chat_id = update.effective_chat.id
@@ -820,7 +805,7 @@ parser.add_argument(
     "-f", "--db_file", help="Specify file for sqlite db", type=str, default="tfchain.db"
 )
 parser.add_argument(
-    "--node-id", 
+    "--node-id",
     help="Unique node ID for leader election",
     default=str(uuid.uuid4())
 )
@@ -913,25 +898,41 @@ if args.dump:
 
 def heartbeat_job(context: CallbackContext):
     leader_info = get_leader(context.bot_data["db"])
-    
+
     if not leader_info or not is_leader_valid(leader_info):
         # Leader is invalid, try to become leader
         if not update_leader(context.bot_data["db"]):
             logging.error("Failed to update leader, shutting down")
             os._exit(1)
         return
-        
+
     current_leader_id = leader_info.split(":")[0]
     if current_leader_id != args.node_id:
         logging.info(f"Another node ({current_leader_id}) is now leader, shutting down")
         os._exit(0)
-        
+
     # Update our heartbeat
     if not update_leader(context.bot_data["db"]):
         logging.error("Failed to update heartbeat, shutting down")
         os._exit(1)
 
-initialize(dispatcher.bot_data)
+initialize_dbs(dispatcher.bot_data)
+
+db = bot_data["db"]
+while True:
+    leader_info = get_leader(db)
+
+    if not leader_info or not is_leader_valid(leader_info):
+        # Try to become leader
+        if update_leader(db):
+            break
+
+    # Wait and check again
+    time.sleep(args.heartbeat_interval)
+
+# We're now the leader
+logging.info(f"Node {args.node_id} is now the leader")
+
 populate_violations(dispatcher.bot_data)
 updater.job_queue.run_repeating(check_job, interval=args.poll, first=1)
 updater.job_queue.run_repeating(heartbeat_job, interval=args.heartbeat_interval)
