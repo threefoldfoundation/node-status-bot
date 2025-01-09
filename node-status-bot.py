@@ -1,7 +1,9 @@
 import argparse
 import logging
+import os
 import sqlite3
 import time
+import uuid
 from datetime import datetime
 
 import grid3.graphql
@@ -317,8 +319,49 @@ def get_violations(con, node_id, periods):
     return violations
 
 
+def is_leader_valid(leader_info):
+    if not leader_info:
+        return False
+        
+    try:
+        leader_id, last_heartbeat = leader_info.split(":")
+        last_heartbeat = float(last_heartbeat)
+        return time.time() - last_heartbeat < 2 * args.heartbeat_interval
+    except:
+        return False
+
+def update_leader(db):
+    try:
+        leader_value = f"{args.node_id}:{time.time()}"
+        db.set_metadata("leader", leader_value)
+        return True
+    except:
+        logging.exception("Failed to update leader")
+        return False
+
+def get_leader(db):
+    try:
+        return db.get_metadata("leader")
+    except:
+        logging.exception("Failed to get leader")
+        return None
+
 def initialize(bot_data):
     bot_data["db"] = RqliteDB(host=args.rqlite_host, port=args.rqlite_port)
+    
+    while True:
+        leader_info = get_leader(bot_data["db"])
+        
+        if not leader_info or not is_leader_valid(leader_info):
+            # Try to become leader
+            if update_leader(bot_data["db"]):
+                break
+                
+        # Wait and check again
+        time.sleep(args.heartbeat_interval)
+        
+    # We're now the leader
+    logging.info(f"Node {args.node_id} is now the leader")
 
 
 def network(update: Update, context: CallbackContext):
@@ -768,6 +811,17 @@ parser.add_argument("-d", "--dump", help="Dump bot data", action="store_true")
 parser.add_argument(
     "-f", "--db_file", help="Specify file for sqlite db", type=str, default="tfchain.db"
 )
+parser.add_argument(
+    "--node-id", 
+    help="Unique node ID for leader election",
+    default=str(uuid.uuid4())
+)
+parser.add_argument(
+    "--heartbeat-interval",
+    help="Heartbeat interval in seconds",
+    type=int,
+    default=30
+)
 args = parser.parse_args()
 
 # pickler = PicklePersistence(filename='bot_data')
@@ -849,9 +903,30 @@ if args.dump:
     print(dispatcher.bot_data)
     print()
 
+def heartbeat_job(context: CallbackContext):
+    leader_info = get_leader(context.bot_data["db"])
+    
+    if not leader_info or not is_leader_valid(leader_info):
+        # Leader is invalid, try to become leader
+        if not update_leader(context.bot_data["db"]):
+            logging.error("Failed to update leader, shutting down")
+            os._exit(1)
+        return
+        
+    current_leader_id = leader_info.split(":")[0]
+    if current_leader_id != args.node_id:
+        logging.info(f"Another node ({current_leader_id}) is now leader, shutting down")
+        os._exit(0)
+        
+    # Update our heartbeat
+    if not update_leader(context.bot_data["db"]):
+        logging.error("Failed to update heartbeat, shutting down")
+        os._exit(1)
+
 initialize(dispatcher.bot_data)
 populate_violations(dispatcher.bot_data)
 updater.job_queue.run_repeating(check_job, interval=args.poll, first=1)
+updater.job_queue.run_repeating(heartbeat_job, interval=args.heartbeat_interval)
 
 updater.start_polling()
 updater.idle()
