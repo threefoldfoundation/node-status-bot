@@ -17,20 +17,20 @@ def create_violation(db_file):
 
     # Add power target change to Down (standby)
     con.execute(
-        "INSERT INTO PowerTargetChanged (node_id, timestamp, old_state, new_state) VALUES (?, ?, ?, ?)",
-        (1, now - 2520, "Up", "Down"),  # 42 minutes ago
+        "INSERT INTO PowerTargetChanged (farm_id, node_id, target, block, event_index, timestamp) VALUES (?, ?, ?, ?, ?, ?)",
+        (1, 1, "Down", 1, 0, now - 2520),  # 42 minutes ago
     )
 
     # Add power state change to Down (standby)
     con.execute(
-        "INSERT INTO PowerStateChanged (node_id, timestamp, old_state, new_state) VALUES (?, ?, ?, ?)",
-        (1, now - 2460, "Up", "Down"),  # 41 minutes ago
+        "INSERT INTO PowerStateChanged (farm_id, node_id, state, down_block, block, event_index, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (1, 1, "Down", None, 1, 0, now - 2460),  # 41 minutes ago
     )
 
     # Add power target change to Up (boot requested)
     con.execute(
-        "INSERT INTO PowerTargetChanged (node_id, timestamp, old_state, new_state) VALUES (?, ?, ?, ?)",
-        (1, now - 2400, "Up", "Down"),  # 40 minutes ago
+        "INSERT INTO PowerTargetChanged (farm_id, node_id, target, block, event_index, timestamp) VALUES (?, ?, ?, ?, ?, ?)",
+        (1, 1, "Up", 1, 1, now - 2400),  # 40 minutes ago
     )
 
     con.commit()
