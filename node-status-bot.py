@@ -341,8 +341,6 @@ def network(update: Update, context: CallbackContext):
         send_message(context, chat_id, text="Network is set to {}net".format(net))
 
 
-
-
 def node_used_farmerbot(con, node_id):
     # Check if the node ever went standby, which is a requirement for it to receive a violation
     result = con.execute(
@@ -353,7 +351,7 @@ def node_used_farmerbot(con, node_id):
 
 def populate_violations(bot_data):
     db = bot_data["db"]
-    
+
     # Check if violations have already been populated
     if db.get_metadata("violations_populated") == "true":
         return
@@ -361,9 +359,10 @@ def populate_violations(bot_data):
     con, periods = get_con_and_periods()
 
     # Get all nodes that have ever been in standby (managed by farmerbot)
-    with con.cursor() as cursor:
-        cursor.execute("SELECT DISTINCT node_id FROM PowerStateChanged WHERE state='Down'")
-        farmerbot_nodes = [row[0] for row in cursor.fetchall()]
+    res = con.execute(
+        "SELECT DISTINCT node_id FROM PowerStateChanged WHERE state='Down'"
+    )
+    farmerbot_nodes = [row[0] for row in res.fetchall()]
 
     # For each farmerbot-managed node, check for existing violations and store them
     for node_id in farmerbot_nodes:
@@ -600,7 +599,7 @@ def timeout(update: Update, context: CallbackContext):
             timeout = int(context.args[0])
             if timeout <= 0:
                 raise ValueError("Timeout must be positive")
-                
+
             db.set_chat_timeout(chat_id, timeout)
             send_message(
                 context,
