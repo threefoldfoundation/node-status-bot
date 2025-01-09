@@ -920,7 +920,7 @@ def heartbeat_job(context: CallbackContext):
 
 initialize_dbs(dispatcher.bot_data)
 
-db = bot_data["db"]
+db = dispatcher.bot_data["db"]
 
 # Add random jitter between 0 and 2x heartbeat interval before starting leader election
 initial_jitter = random.uniform(0, args.heartbeat_interval / 2)
