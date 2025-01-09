@@ -1,9 +1,13 @@
 services:
   rqlite1:
     image: rqlite/rqlite:latest
-    command: ["-fk"]
-    ports:
-      - "4001:4001"
+    command: >
+      rqlited -node-id 1
+      -http-addr=rqlite1:4001
+      -raft-addr=rqlite1:4002
+      -bootstrap-expect 3
+      -join rqlite1:4002,rqlite2:4002,rqlite3:4002
+      /rqlite/file/data
     environment:
       - RQLITE_BOOTSTRAP_EXPECT=3
     volumes:
@@ -13,12 +17,15 @@ services:
 
   rqlite2:
     image: rqlite/rqlite:latest
-    command: ["-fk"]
-    ports:
-      - "4002:4001"
+    command: >
+      rqlited -node-id 2
+      -http-addr=rqlite2:4001
+      -raft-addr=rqlite2:4002
+      -bootstrap-expect 3
+      -join rqlite1:4002,rqlite2:4002,rqlite3:4002
+      /rqlite/file/data
     environment:
       - RQLITE_BOOTSTRAP_EXPECT=3
-      - RQLITE_JOIN=http://rqlite1:4001
     volumes:
       - rqlite2-data:/rqlite/file/data
     networks:
@@ -26,12 +33,15 @@ services:
 
   rqlite3:
     image: rqlite/rqlite:latest
-    command: ["-fk"]
-    ports:
-      - "4003:4001"
+    command: >
+      rqlited -node-id 3
+      -http-addr=rqlite3:4001
+      -raft-addr=rqlite3:4002
+      -bootstrap-expect 3
+      -join rqlite1:4002,rqlite2:4002,rqlite3:4002
+      /rqlite/file/data
     environment:
       - RQLITE_BOOTSTRAP_EXPECT=3
-      - RQLITE_JOIN=http://rqlite1:4001
     volumes:
       - rqlite3-data:/rqlite/file/data
     networks:
