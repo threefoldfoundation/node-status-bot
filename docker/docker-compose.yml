@@ -45,7 +45,7 @@ services:
     build:
       context: ..
       dockerfile: docker/Dockerfile
-    command: python node-status-bot.py ${BOT_TOKEN} --rqlite-host rqlite1 --rqlite-port 4001
+    command: python node-status-bot.py ${BOT_TOKEN} --rqlite-host rqlite1 --rqlite-port 4001 --node-id bot1 --verbose
     depends_on:
       - rqlite1
     networks:
@@ -55,7 +55,7 @@ services:
     build:
       context: ..
       dockerfile: docker/Dockerfile
-    command: python node-status-bot.py ${BOT_TOKEN} --rqlite-host rqlite2 --rqlite-port 4001
+    command: python node-status-bot.py ${BOT_TOKEN} --rqlite-host rqlite2 --rqlite-port 4001 --node-id bot2 --verbose
     depends_on:
       - rqlite2
     networks:
@@ -65,7 +65,7 @@ services:
     build:
       context: ..
       dockerfile: docker/Dockerfile
-    command: python node-status-bot.py ${BOT_TOKEN} --rqlite-host rqlite3 --rqlite-port 4001
+    command: python node-status-bot.py ${BOT_TOKEN} --rqlite-host rqlite3 --rqlite-port 4001 --node-id bot3 --verbose
     depends_on:
       - rqlite3
     networks:
