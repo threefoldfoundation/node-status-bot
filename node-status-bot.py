@@ -8,6 +8,7 @@ from datetime import datetime
 
 import grid3.graphql
 import telegram
+from ingester import prep_db
 from gql import gql
 from grid3.minting.period import Period
 from grid3.types import Node
@@ -347,6 +348,13 @@ def get_leader(db):
         return None
 
 def initialize(bot_data):
+    # Initialize SQLite database if it doesn't exist
+    if not os.path.exists(args.db_file):
+        logging.info(f"Creating new database at {args.db_file}")
+        con = sqlite3.connect(args.db_file)
+        prep_db(con)
+        con.close()
+
     bot_data["db"] = RqliteDB(host=args.rqlite_host, port=args.rqlite_port)
     
     while True:
