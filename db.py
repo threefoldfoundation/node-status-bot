@@ -1,6 +1,8 @@
 from typing import Any, Dict, List, Tuple
+from dataclasses import asdict
 
 import pyrqlite.dbapi2 as dbapi2
+from find_violations import Violation
 
 
 class RqliteDB:
@@ -191,6 +193,7 @@ class RqliteDB:
             )
 
     def get_node_violations(self, node_id: int, network: str) -> Dict[float, Violation]:
+        """Get all violations for a node as a dict of Violation objects keyed by boot_requested timestamp"""
         with self.conn.cursor() as cursor:
             cursor.execute(
                 """
@@ -215,8 +218,8 @@ class RqliteDB:
         """Add a single violation (kept for backward compatibility)"""
         self.add_violations(node_id, network, [violation])
 
-    def add_violations(self, node_id: int, network: str, violations):
-        """Add multiple violations in a single request"""
+    def add_violations(self, node_id: int, network: str, violations: List[Violation]):
+        """Add multiple Violation objects in a single request"""
         with self.conn.cursor() as cursor:
             cursor.executemany(
                 """
