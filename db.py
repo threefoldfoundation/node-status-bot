@@ -190,7 +190,7 @@ class RqliteDB:
                 ),
             )
 
-    def get_node_violations(self, node_id: int, network: str) -> Dict[float, Dict]:
+    def get_node_violations(self, node_id: int, network: str) -> Dict[float, Violation]:
         with self.conn.cursor() as cursor:
             cursor.execute(
                 """
@@ -202,20 +202,20 @@ class RqliteDB:
             )
 
             return {
-                row[0]: {
-                    "boot_requested": row[0],
-                    "booted_at": row[1],
-                    "end_time": row[2],
-                    "finalized": bool(row[3]),
-                }
+                row[0]: Violation(
+                    boot_requested=row[0],
+                    booted_at=row[1],
+                    end_time=row[2],
+                    finalized=bool(row[3])
+                )
                 for row in cursor.fetchall()
             }
 
-    def add_violation(self, node_id: int, network: str, violation: Dict[str, Any]):
+    def add_violation(self, node_id: int, network: str, violation):
         """Add a single violation (kept for backward compatibility)"""
         self.add_violations(node_id, network, [violation])
 
-    def add_violations(self, node_id: int, network: str, violations: List[Dict[str, Any]]):
+    def add_violations(self, node_id: int, network: str, violations):
         """Add multiple violations in a single request"""
         with self.conn.cursor() as cursor:
             cursor.executemany(
@@ -228,10 +228,10 @@ class RqliteDB:
                     (
                         node_id,
                         network,
-                        v["boot_requested"],
-                        v["booted_at"],
-                        v["end_time"],
-                        v["finalized"],
+                        v.boot_requested,
+                        v.booted_at,
+                        v.end_time,
+                        v.finalized,
                     )
                     for v in violations
                 ],
