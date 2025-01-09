@@ -541,22 +541,19 @@ def subscribe(update: Update, context: CallbackContext):
             # Add nodes to database first
             for node_id, node in new_nodes.items():
                 db.create_node(node, net)
+                
+                # Fetch and store violations for the newly added node
+                con, periods = get_con_and_periods()
+                if node_used_farmerbot(con, node_id):
+                    violations = get_violations(con, node_id, periods)
+                    if violations:
+                        db.add_violations(node_id, net, violations)
 
             # Add all subscriptions in one go
             db.add_subscriptions(chat_id, net, list(new_nodes.keys()))
 
             # Update in-memory node data
             known_nodes = context.bot_data["nodes"][net]
-            unknown_nodes = new_nodes.keys() - known_nodes.keys()
-            if unknown_nodes:
-                con, periods = get_con_and_periods()
-                for node_id in unknown_nodes:
-                    if node_used_farmerbot(con, node_id):
-                        violations = get_violations(con, node_id, periods)
-                        new_nodes[node_id].violations = {
-                            v.boot_requested: v for v in violations
-                        }
-
             known_nodes.update(new_nodes)
             new_subs = [n for n in node_ids if n in new_nodes]
         else:
