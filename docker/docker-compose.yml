@@ -38,9 +38,7 @@ services:
     build:
       context: ..
       dockerfile: docker/Dockerfile
-    environment:
-      - RQLITE_HOST=rqlite1
-      - RQLITE_PORT=4001
+    command: python node-status-bot.py ${BOT_TOKEN} --rqlite-host rqlite1 --rqlite-port 4001
     depends_on:
       - rqlite1
     networks:
@@ -50,9 +48,7 @@ services:
     build:
       context: ..
       dockerfile: docker/Dockerfile
-    environment:
-      - RQLITE_HOST=rqlite2
-      - RQLITE_PORT=4001
+    command: python node-status-bot.py ${BOT_TOKEN} --rqlite-host rqlite2 --rqlite-port 4001
     depends_on:
       - rqlite2
     networks:
@@ -62,9 +58,7 @@ services:
     build:
       context: ..
       dockerfile: docker/Dockerfile
-    environment:
-      - RQLITE_HOST=rqlite3
-      - RQLITE_PORT=4001
+    command: python node-status-bot.py ${BOT_TOKEN} --rqlite-host rqlite3 --rqlite-port 4001
     depends_on:
       - rqlite3
     networks:

@@ -318,7 +318,7 @@ def get_violations(con, node_id, periods):
 
 
 def initialize(bot_data):
-    bot_data["db"] = RqliteDB()
+    bot_data["db"] = RqliteDB(host=args.rqlite_host, port=args.rqlite_port)
 
 
 def network(update: Update, context: CallbackContext):
@@ -753,6 +753,8 @@ def violations(update: Update, context: CallbackContext):
 
 parser = argparse.ArgumentParser()
 parser.add_argument("token", help="Specify a bot token")
+parser.add_argument("--rqlite-host", help="Rqlite host", default="localhost")
+parser.add_argument("--rqlite-port", help="Rqlite port", type=int, default=4001)
 parser.add_argument("-v", "--verbose", help="Verbose output", action="store_true")
 parser.add_argument(
     "-p", "--poll", help="Set polling frequency in seconds", type=int, default=60
