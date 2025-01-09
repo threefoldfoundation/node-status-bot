@@ -1,6 +1,7 @@
 services:
   rqlite1:
     image: rqlite/rqlite:latest
+    command: ["-fk"]
     ports:
       - "4001:4001"
     environment:
@@ -12,6 +13,7 @@ services:
 
   rqlite2:
     image: rqlite/rqlite:latest
+    command: ["-fk"]
     ports:
       - "4002:4001"
     environment:
@@ -24,6 +26,7 @@ services:
 
   rqlite3:
     image: rqlite/rqlite:latest
+    command: ["-fk"]
     ports:
       - "4003:4001"
     environment:
