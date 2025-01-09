@@ -349,6 +349,10 @@ def node_used_farmerbot(con, node_id):
     return result is not None
 
 
+# This function existed to make a smooth transition when the violations feature
+# was launched. It stores all historic violations for all nodes that were
+# already in the system. For a new bot, it's not relevant since there won't be
+# any active nodes from the start.
 def populate_violations(bot_data):
     db = bot_data["db"]
 
@@ -363,6 +367,10 @@ def populate_violations(bot_data):
         "SELECT DISTINCT node_id FROM PowerStateChanged WHERE state='Down'"
     )
     farmerbot_nodes = [row[0] for row in res.fetchall()]
+
+    # Only check nodes that are already in our database
+    existing_nodes = db.get_nodes("main")
+    farmerbot_nodes = [n for n in farmerbot_nodes if n in existing_nodes]
 
     # For each farmerbot-managed node, check for existing violations and store them
     for node_id in farmerbot_nodes:
@@ -541,7 +549,7 @@ def subscribe(update: Update, context: CallbackContext):
             # Add nodes to database first
             for node_id, node in new_nodes.items():
                 db.create_node(node, net)
-                
+
                 # Fetch and store violations for the newly added node
                 con, periods = get_con_and_periods()
                 if node_used_farmerbot(con, node_id):
