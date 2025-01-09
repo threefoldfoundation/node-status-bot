@@ -601,9 +601,6 @@ def subscribe(update: Update, context: CallbackContext):
             # Add all subscriptions in one go
             db.add_subscriptions(chat_id, net, list(new_nodes.keys()))
 
-            # Update in-memory node data
-            known_nodes = context.bot_data["nodes"][net]
-            known_nodes.update(new_nodes)
             new_subs = [n for n in node_ids if n in new_nodes]
         else:
             text = "No valid node ids found to add. Either the nodes don't exist or you were already subscribed to them."
