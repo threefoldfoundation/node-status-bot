@@ -802,7 +802,6 @@ parser.add_argument(
     "-p", "--poll", help="Set polling frequency in seconds", type=int, default=60
 )
 parser.add_argument("-t", "--test", help="Enable test feature", action="store_true")
-parser.add_argument("-d", "--dump", help="Dump bot data", action="store_true")
 parser.add_argument(
     "-f", "--db_file", help="Specify file for sqlite db", type=str, default="tfchain.db"
 )
@@ -887,11 +886,6 @@ if args.test:
     import json
 
     get_nodes = get_nodes_from_file
-
-if args.dump:
-    print("Bot data:")
-    print(dispatcher.bot_data)
-    print()
 
 
 def heartbeat_job(context: CallbackContext):
