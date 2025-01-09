@@ -1,6 +1,7 @@
 import argparse
 import logging
 import os
+import random
 import sqlite3
 import time
 import uuid
@@ -919,6 +920,11 @@ def heartbeat_job(context: CallbackContext):
 initialize_dbs(dispatcher.bot_data)
 
 db = bot_data["db"]
+
+# Add random jitter between 0 and 2x heartbeat interval before starting leader election
+initial_jitter = random.uniform(0, args.heartbeat_interval * 2)
+time.sleep(initial_jitter)
+
 while True:
     leader_info = get_leader(db)
 
@@ -927,8 +933,8 @@ while True:
         if update_leader(db):
             break
 
-    # Wait and check again
-    time.sleep(args.heartbeat_interval)
+    # Wait and check again with some jitter
+    time.sleep(args.heartbeat_interval + random.uniform(-0.5, 0.5))
 
 # We're now the leader
 logging.info(f"Node {args.node_id} is now the leader")
