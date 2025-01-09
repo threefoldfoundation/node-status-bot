@@ -146,8 +146,8 @@ def check_job(context: CallbackContext):
                 if update.nodeId in all_violations:
                     existing_violations = node_data["violations"]
                     for violation in all_violations[update.nodeId]:
-                        if violation["boot_requested"] not in existing_violations:
-                            if violation["finalized"]:
+                        if violation.boot_requested not in existing_violations:
+                            if violation.finalized:
                                 for chat_id in subbed_nodes[update.nodeId]:
                                     send_message(
                                         context,
@@ -157,7 +157,7 @@ def check_job(context: CallbackContext):
                                         ),
                                     )
                             elif (
-                                violation["end_time"] - violation["boot_requested"]
+                                violation.end_time - violation.boot_requested
                                 > BOOT_TOLERANCE
                             ):
                                 for chat_id in subbed_nodes[update.nodeId]:
@@ -288,7 +288,20 @@ def get_nodes_from_file(net, node_ids):
     For use in test mode, to emulate get_nodes using data in a file. The updatedAt value is given in the file as a delta of how many seconds in the past and converted to absolute time here
     """
     if net == "main":
-        text = open("./test/node", "r").read()
+        try:
+            text = open("node_test_data", "r").read()
+        except FileNotFoundError:
+            # Create sample node data
+            sample_data = {
+                "nodeID": 1,
+                "twinID": 1,
+                "updatedAt": 30,  # 30 seconds ago
+                "power": {"state": "Up", "target": "Up"},
+            }
+            with open("node_test_data", "w") as f:
+                json.dump(sample_data, f)
+            text = json.dumps(sample_data)
+
         node = Node(json.loads(text))
         node.updatedAt = time.time() - node.updatedAt
         node.status = get_node_status(node)
