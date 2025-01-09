@@ -332,6 +332,7 @@ def is_leader_valid(leader_info):
     except:
         return False
 
+
 def update_leader(db):
     try:
         leader_value = f"{args.node_id}:{time.time()}"
@@ -341,12 +342,14 @@ def update_leader(db):
         logging.exception("Failed to update leader")
         return False
 
+
 def get_leader(db):
     try:
         return db.get_metadata("leader")
     except:
         logging.exception("Failed to get leader")
         return None
+
 
 def initialize_dbs(bot_data):
     # Initialize SQLite database if it doesn't exist
@@ -357,6 +360,7 @@ def initialize_dbs(bot_data):
         con.close()
 
     bot_data["db"] = RqliteDB(host=args.rqlite_host, port=args.rqlite_port)
+
 
 def network(update: Update, context: CallbackContext):
     chat_id = update.effective_chat.id
@@ -806,15 +810,10 @@ parser.add_argument(
     "-f", "--db_file", help="Specify file for sqlite db", type=str, default="tfchain.db"
 )
 parser.add_argument(
-    "--node-id",
-    help="Unique node ID for leader election",
-    default=str(uuid.uuid4())
+    "--node-id", help="Unique node ID for leader election", default=str(uuid.uuid4())
 )
 parser.add_argument(
-    "--heartbeat-interval",
-    help="Heartbeat interval in seconds",
-    type=int,
-    default=30
+    "--heartbeat-interval", help="Heartbeat interval in seconds", type=int, default=30
 )
 args = parser.parse_args()
 
@@ -897,6 +896,7 @@ if args.dump:
     print(dispatcher.bot_data)
     print()
 
+
 def heartbeat_job(context: CallbackContext):
     leader_info = get_leader(context.bot_data["db"])
 
@@ -917,12 +917,13 @@ def heartbeat_job(context: CallbackContext):
         logging.error("Failed to update heartbeat, shutting down")
         os._exit(1)
 
+
 initialize_dbs(dispatcher.bot_data)
 
 db = bot_data["db"]
 
 # Add random jitter between 0 and 2x heartbeat interval before starting leader election
-initial_jitter = random.uniform(0, args.heartbeat_interval * 2)
+initial_jitter = random.uniform(0, args.heartbeat_interval / 2)
 time.sleep(initial_jitter)
 
 while True:
