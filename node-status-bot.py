@@ -31,6 +31,7 @@ MAX_TEXT_LENGTH = 3800
 
 NETWORKS = ["main", "test", "dev"]
 DEFAULT_PING_TIMEOUT = 10
+DEFAULT_HEARTBEAT_INTERVAL = 30
 BOOT_TOLERANCE = 60 * 40
 
 
@@ -809,7 +810,10 @@ parser.add_argument(
     "--node-id", help="Unique node ID for leader election", default=str(uuid.uuid4())
 )
 parser.add_argument(
-    "--heartbeat-interval", help="Heartbeat interval in seconds", type=int, default=30
+    "--heartbeat-interval",
+    help="Heartbeat interval in seconds",
+    type=int,
+    default=DEFAULT_HEARTBEAT_INTERVAL,
 )
 args = parser.parse_args()
 
