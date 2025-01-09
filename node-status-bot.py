@@ -925,8 +925,8 @@ while True:
         if update_leader(db):
             break
 
-    # Wait and check again with some jitter
-    time.sleep(args.heartbeat_interval + random.uniform(-0.5, 0.5))
+    # Wait and check again
+    time.sleep(args.heartbeat_interval)
 
 # We're now the leader
 logging.info(f"Node {args.node_id} is now the leader")
