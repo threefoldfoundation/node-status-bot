@@ -1,0 +1,75 @@
+version: '3.8'
+
+services:
+  rqlite1:
+    image: rqlite/rqlite:latest
+    ports:
+      - "4001:4001"
+    environment:
+      - RQLITE_BOOTSTRAP_EXPECT=3
+    volumes:
+      - rqlite1-data:/rqlite/file/data
+    networks:
+      - rqlite-net
+
+  rqlite2:
+    image: rqlite/rqlite:latest
+    ports:
+      - "4002:4001"
+    environment:
+      - RQLITE_BOOTSTRAP_EXPECT=3
+      - RQLITE_JOIN=http://rqlite1:4001
+    volumes:
+      - rqlite2-data:/rqlite/file/data
+    networks:
+      - rqlite-net
+
+  rqlite3:
+    image: rqlite/rqlite:latest
+    ports:
+      - "4003:4001"
+    environment:
+      - RQLITE_BOOTSTRAP_EXPECT=3
+      - RQLITE_JOIN=http://rqlite1:4001
+    volumes:
+      - rqlite3-data:/rqlite/file/data
+    networks:
+      - rqlite-net
+
+  bot1:
+    build: ..
+    environment:
+      - RQLITE_HOST=rqlite1
+      - RQLITE_PORT=4001
+    depends_on:
+      - rqlite1
+    networks:
+      - rqlite-net
+
+  bot2:
+    build: ..
+    environment:
+      - RQLITE_HOST=rqlite2
+      - RQLITE_PORT=4001
+    depends_on:
+      - rqlite2
+    networks:
+      - rqlite-net
+
+  bot3:
+    build: ..
+    environment:
+      - RQLITE_HOST=rqlite3
+      - RQLITE_PORT=4001
+    depends_on:
+      - rqlite3
+    networks:
+      - rqlite-net
+
+volumes:
+  rqlite1-data:
+  rqlite2-data:
+  rqlite3-data:
+
+networks:
+  rqlite-net:
