@@ -8,6 +8,8 @@
     zinit_services_dir: "/etc/zinit"
     bot_user: "nodebot"
     bot_group: "nodebot"
+    git_repo: "https://github.com/threefoldfoundation/node-status-bot.git"
+    git_ref: "main"  # Can be commit hash, tag, or branch name
 
   tasks:
     - name: Ensure system dependencies are installed
@@ -46,19 +48,15 @@
         state: present
       become_user: "{{ bot_user }}"
 
-    - name: Copy bot files
-      copy:
-        src: "{{ item }}"
+    - name: Clone repository and checkout specific ref
+      git:
+        repo: "{{ git_repo }}"
         dest: "{{ bot_install_dir }}"
-        owner: "{{ bot_user }}"
-        group: "{{ bot_group }}"
-        mode: '0644'
-      with_items:
-        - node-status-bot.py
-        - db.py
-        - find_violations.py
-        - ingester.py
-        - requirements.txt
+        version: "{{ git_ref }}"
+        force: yes
+        update: yes
+        single_branch: yes
+      become_user: "{{ bot_user }}"
 
     - name: Install Python dependencies
       ansible.builtin.pip:
@@ -66,6 +64,13 @@
         virtualenv: "{{ bot_venv_dir }}"
         state: present
       become_user: "{{ bot_user }}"
+
+    - name: Set correct permissions on cloned repository
+      file:
+        path: "{{ bot_install_dir }}"
+        owner: "{{ bot_user }}"
+        group: "{{ bot_group }}"
+        recurse: yes
 
     - name: Ensure zinit services directory exists
       file:
