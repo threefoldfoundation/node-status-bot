@@ -1,0 +1,89 @@
+---
+- name: Deploy node-status-bot
+  hosts: all
+  become: yes
+  vars:
+    bot_install_dir: "/opt/node-status-bot"
+    bot_venv_dir: "{{ bot_install_dir }}/venv"
+    zinit_services_dir: "/etc/zinit"
+    bot_user: "nodebot"
+    bot_group: "nodebot"
+
+  tasks:
+    - name: Ensure system dependencies are installed
+      apt:
+        name:
+          - python3-venv
+          - python3-pip
+          - build-essential
+          - git
+        state: present
+        update_cache: yes
+
+    - name: Create bot user and group
+      user:
+        name: "{{ bot_user }}"
+        group: "{{ bot_group }}"
+        system: yes
+        shell: /usr/sbin/nologin
+
+    - name: Ensure installation directory exists
+      file:
+        path: "{{ bot_install_dir }}"
+        state: directory
+        owner: "{{ bot_user }}"
+        group: "{{ bot_group }}"
+        mode: '0755'
+
+    - name: Create Python virtual environment
+      command: >
+        python3 -m venv {{ bot_venv_dir }}
+        creates={{ bot_venv_dir }}/bin/activate
+      become_user: "{{ bot_user }}"
+
+    - name: Copy bot files
+      copy:
+        src: "{{ item }}"
+        dest: "{{ bot_install_dir }}"
+        owner: "{{ bot_user }}"
+        group: "{{ bot_group }}"
+        mode: '0644'
+      with_items:
+        - node-status-bot.py
+        - db.py
+        - find_violations.py
+        - ingester.py
+        - requirements.txt
+
+    - name: Install Python dependencies
+      pip:
+        requirements: "{{ bot_install_dir }}/requirements.txt"
+        virtualenv: "{{ bot_venv_dir }}"
+        virtualenv_command: python3 -m venv
+        state: present
+      become_user: "{{ bot_user }}"
+
+    - name: Ensure zinit services directory exists
+      file:
+        path: "{{ zinit_services_dir }}"
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Create zinit service file for node-status-bot
+      copy:
+        dest: "{{ zinit_services_dir }}/node-status-bot.yaml"
+        content: |
+          exec: {{ bot_venv_dir }}/bin/python {{ bot_install_dir }}/node-status-bot.py
+          log: /var/log/node-status-bot.log
+          user: {{ bot_user }}
+          env:
+            PYTHONUNBUFFERED: 1
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Start node-status-bot service with zinit
+      command: zinit monitor node-status-bot
+      changed_when: false
