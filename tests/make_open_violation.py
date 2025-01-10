@@ -12,8 +12,8 @@ def create_violation(db_file):
 
     # Create violation scenario:
     # 1. Node 1 is put in standby (Down) 42 minutes ago
-    # 2. Boot is requested (Up) 41 minutes ago
-    # 3. Node boots now and receives a violation
+    # 2. Boot is requested (Up) 41 minutes ago (the node status bot gives a 10 minute tolerance beyond the 30 minute window)
+    # 3. Node has not booted yet
 
     # Add power target change to Down (standby)
     # Get current checkpoint block
@@ -42,19 +42,6 @@ def create_violation(db_file):
         (1, 1, "Up", block, 0, now - 2460),  # 41 minutes ago
     )
 
-    # Add uptime report
-    block += 1
-    con.execute(
-        "INSERT INTO NodeUptimeReported (node_id, uptime, timestamp_hint, block, event_index, timestamp) VALUES (?, ?, ?, ?, ?, ?)",
-        (1, 1, now, block, 0, now),  # Uptime starts at 1 when node boots
-    )
-
-    # Add power state change to Up
-    block += 1
-    con.execute(
-        "INSERT INTO PowerStateChanged (farm_id, node_id, state, down_block, block, event_index, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?)",
-        (1, 1, "Up", None, block, 0, now),
-    )
     # Update checkpoint block and time
     con.execute(
         "UPDATE kv SET value=? WHERE key='checkpoint_block'",
