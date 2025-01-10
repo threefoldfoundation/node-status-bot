@@ -36,9 +36,14 @@
         mode: '0755'
 
     - name: Create Python virtual environment
-      command: >
-        python3 -m venv {{ bot_venv_dir }}
-        creates={{ bot_venv_dir }}/bin/activate
+      ansible.builtin.pip:
+        name:
+          - pip
+          - setuptools
+          - wheel
+        virtualenv: "{{ bot_venv_dir }}"
+        virtualenv_command: python3 -m venv
+        state: present
       become_user: "{{ bot_user }}"
 
     - name: Copy bot files
@@ -56,10 +61,9 @@
         - requirements.txt
 
     - name: Install Python dependencies
-      pip:
+      ansible.builtin.pip:
         requirements: "{{ bot_install_dir }}/requirements.txt"
         virtualenv: "{{ bot_venv_dir }}"
-        virtualenv_command: python3 -m venv
         state: present
       become_user: "{{ bot_user }}"
 
