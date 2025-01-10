@@ -6,8 +6,6 @@
     bot_install_dir: "/opt/node-status-bot"
     bot_venv_dir: "{{ bot_install_dir }}/venv"
     zinit_services_dir: "/etc/zinit"
-    bot_user: "nodebot"
-    bot_group: "nodebot"
     git_repo: "https://github.com/threefoldfoundation/node-status-bot.git"
     git_ref: "main"  # Can be commit hash, tag, or branch name
 
@@ -22,19 +20,10 @@
         state: present
         update_cache: yes
 
-    - name: Create bot user and group
-      user:
-        name: "{{ bot_user }}"
-        group: "{{ bot_group }}"
-        system: yes
-        shell: /usr/sbin/nologin
-
     - name: Ensure installation directory exists
       file:
         path: "{{ bot_install_dir }}"
         state: directory
-        owner: "{{ bot_user }}"
-        group: "{{ bot_group }}"
         mode: '0755'
 
     - name: Create Python virtual environment
@@ -46,7 +35,6 @@
         virtualenv: "{{ bot_venv_dir }}"
         virtualenv_command: python3 -m venv
         state: present
-      become_user: "{{ bot_user }}"
 
     - name: Clone repository and checkout specific ref
       git:
@@ -56,21 +44,12 @@
         force: yes
         update: yes
         single_branch: yes
-      become_user: "{{ bot_user }}"
 
     - name: Install Python dependencies
       ansible.builtin.pip:
         requirements: "{{ bot_install_dir }}/requirements.txt"
         virtualenv: "{{ bot_venv_dir }}"
         state: present
-      become_user: "{{ bot_user }}"
-
-    - name: Set correct permissions on cloned repository
-      file:
-        path: "{{ bot_install_dir }}"
-        owner: "{{ bot_user }}"
-        group: "{{ bot_group }}"
-        recurse: yes
 
     - name: Ensure zinit services directory exists
       file:
@@ -86,7 +65,6 @@
         content: |
           exec: {{ bot_venv_dir }}/bin/python {{ bot_install_dir }}/node-status-bot.py
           log: /var/log/node-status-bot.log
-          user: {{ bot_user }}
           env:
             PYTHONUNBUFFERED: 1
         owner: root
