@@ -16,8 +16,8 @@ def wake_node(db_file, node_id):
     # Add uptime report
     block += 1
     con.execute(
-        "INSERT INTO NodeUptimeReported (farm_id, node_id, uptime, block, event_index, timestamp) VALUES (?, ?, ?, ?, ?, ?)",
-        (1, node_id, 0, block, 0, now),  # Uptime starts at 0 when node boots
+        "INSERT INTO NodeUptimeReported (node_id, uptime, timestamp_hint, block, event_index, timestamp) VALUES (?, ?, ?, ?, ?, ?)",
+        (node_id, 1, now, block, 0, now),  # Uptime starts at 1 when node boots
     )
 
     # Add power state change to Up
