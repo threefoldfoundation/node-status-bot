@@ -50,13 +50,10 @@
             -bootstrap-expect 3
             -join {{ cluster_nodes | map('regex_replace', '$', ':4002') | join(',') }}
             {{ rqlite_install_dir }}/node
-          log: /var/log/rqlite.log
-          pid_file: /var/run/rqlite.pid
-          respawn: true
         owner: root
         group: root
         mode: '0644'
 
     - name: Start rqlite service with zinit
-      command: zinit start rqlite
+      command: zinit monitor rqlite
       changed_when: false
