@@ -1,6 +1,6 @@
+import argparse
 import sqlite3
 import time
-import argparse
 
 
 def create_violation(db_file):
@@ -16,24 +16,37 @@ def create_violation(db_file):
     # 3. Node has not booted yet
 
     # Add power target change to Down (standby)
+    # Get current checkpoint block
+    cursor = con.cursor()
+    cursor.execute("SELECT value FROM kv WHERE key='checkpoint_block'")
+    block = int(cursor.fetchone()[0])
+
+    # Add power target change to Down (standby)
+    block += 1
     con.execute(
         "INSERT INTO PowerTargetChanged (farm_id, node_id, target, block, event_index, timestamp) VALUES (?, ?, ?, ?, ?, ?)",
-        (1, 1, "Down", 1, 0, now - 2520),  # 42 minutes ago
+        (1, 1, "Down", block, 0, now - 2520),  # 42 minutes ago
     )
 
     # Add power state change to Down (standby)
+    block += 1
     con.execute(
         "INSERT INTO PowerStateChanged (farm_id, node_id, state, down_block, block, event_index, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?)",
-        (1, 1, "Down", None, 2, 0, now - 2490),  # 41.5 minutes ago
+        (1, 1, "Down", None, block, 0, now - 2490),  # 41.5 minutes ago
     )
 
     # Add power target change to Up (boot requested)
+    block += 1
     con.execute(
         "INSERT INTO PowerTargetChanged (farm_id, node_id, target, block, event_index, timestamp) VALUES (?, ?, ?, ?, ?, ?)",
-        (1, 1, "Up", 3, 0, now - 2460),  # 41 minutes ago
+        (1, 1, "Up", block, 0, now - 2460),  # 41 minutes ago
     )
 
-    # Also set the checkpoint_time, otherwise these events won't be processed
+    # Update checkpoint block and time
+    con.execute(
+        "UPDATE kv SET value=? WHERE key='checkpoint_block'",
+        (block,),
+    )
     con.execute(
         "UPDATE kv SET value=? WHERE key='checkpoint_time'",
         (now,),
