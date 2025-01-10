@@ -32,6 +32,7 @@ MAX_TEXT_LENGTH = 3800
 NETWORKS = ["main", "test", "dev"]
 DEFAULT_PING_TIMEOUT = 10
 DEFAULT_HEARTBEAT_INTERVAL = 30
+JITTER_TIME = 5
 BOOT_TOLERANCE = 60 * 40
 
 
@@ -930,8 +931,11 @@ initialize_dbs(dispatcher.bot_data)
 
 db = dispatcher.bot_data["db"]
 
-# Add random jitter between 0 and 2x heartbeat interval before starting leader election
-initial_jitter = random.uniform(0, args.heartbeat_interval / 2)
+# Add random jitter before proceeding with leader logic. If all nodes start
+# simultaneously, they might all try setting themselves as the leader and
+# proceeding to connect to Telegram. While eventually one will prevail, that
+# takes a couple of heartbeat intervals
+initial_jitter = random.uniform(0, JITTER_TIME)
 time.sleep(initial_jitter)
 
 while True:
