@@ -7,8 +7,7 @@
     rqlite_install_dir: "/opt/rqlite"
     zinit_services_dir: "/etc/zinit"
     cluster_nodes: "{{ groups['all'] }}"  # List of all hosts in the inventory
-    node_id_map:  # Map hostnames to node IDs
-      "{{ inventory_hostname }}": "{{ play_hosts.index(inventory_hostname) + 1 }}"
+    node_id: "{{ play_hosts.index(inventory_hostname) + 1 }}"
 
   tasks:
     - name: Ensure installation directory exists
@@ -45,7 +44,7 @@
         dest: "{{ zinit_services_dir }}/rqlite.yaml"
         content: |
           exec: {{ rqlite_install_dir }}/rqlited
-            -node-id {{ node_id_map[inventory_hostname] }}
+            -node-id {{ node_id }}
             -http-addr {{ inventory_hostname }}:4001
             -raft-addr {{ inventory_hostname }}:4002
             -bootstrap-expect 3
