@@ -1,0 +1,72 @@
+# Ignore Python compiled files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Ignore virtual environments
+venv/
+.venv/
+env/
+ENV/
+
+# Ignore IDE specific files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Ignore SQLite database files
+*.db
+*.sqlite
+*.sqlite3
+
+# Ignore log files
+logs
+*.log
+
+# Ignore test data
+test_data/
+
+# Ignore Docker volumes
+docker/rqlite1-data/
+docker/rqlite2-data/
+docker/rqlite3-data/
+
+# Ignore local environment files
+.env
+.env.local
+
+# Ignore backup files
+*.bak
+
+# Ignore generated files
+node_test_data
+
+# Ignore macOS specific files
+.DS_Store
+
+# Ignore Windows specific files
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Ignore Python packaging files
+build/
+dist/
+*.egg-info/
+*.egg
+*.manifest
+*.spec
+
+# Ignore pytest cache
+.pytest_cache/
+
+# Ignore coverage reports
+.coverage
+htmlcov/
+
+# Ignore Jupyter Notebook checkpoints
+.ipynb_checkpoints/
+
+# Ignore Ansible retry files
+*.retry
