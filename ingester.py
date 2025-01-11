@@ -16,7 +16,6 @@ from websocket._exceptions import (
     WebSocketAddressException,
 )
 import prometheus_client
-from grid3.minting.period import Period
 from grid3 import tfchain
 
 MIN_WORKERS = 2
@@ -266,7 +265,13 @@ def parallelize(con, start_number, end_number, block_queue, write_queue):
 
 
 def prep_db(con):
-    # While block number and timestamp of the block are 1-1, converting between them later is not trivial, so it can be helpful to have both. We also store the event index, because the ordering of events within a block can be important from the perspective of minting (in rare cases). For uptime_hint, this is as far as I know always equal to the block time stamp // 1000
+    # While block number and timestamp of the block are 1-1, converting between
+    # them later is not trivial, so it can be helpful to have both. We also
+    # store the event index, because the ordering of events within a block can
+    # be important from the perspective of minting (in rare cases). For
+    # uptime_hint, this is as far as I know always equal to the block timestamp
+    # // 1000. Note that we also convert all incoming timestamps to whole
+    # second precision
     # Each event should be uniquely identified by its block and event numbers
     con.execute(
         "CREATE TABLE IF NOT EXISTS NodeUptimeReported(node_id, uptime, timestamp_hint, block, event_index, timestamp, UNIQUE(event_index, block))"
