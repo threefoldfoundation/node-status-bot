@@ -1,0 +1,28 @@
+services:
+  rqlite:
+    image: rqlite/rqlite:latest
+    command: >
+      rqlited -node-id 1
+      -http-addr=rqlite:4001
+      /rqlite/file/data
+    volumes:
+      - rqlite1-data:/rqlite/file/data
+
+  bot:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    working_dir: /data
+    command: python /app/node-status-bot.py ${BOT_TOKEN} --rqlite-host rqlite --rqlite-port 4001 --verbose --test --poll 5
+    depends_on:
+      - rqlite
+    volumes:
+       - ./test_data:/data
+
+volumes:
+  rqlite1-data:
+  rqlite2-data:
+  rqlite3-data:
+
+networks:
+  rqlite-net:
