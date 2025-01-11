@@ -24,7 +24,7 @@ Since v2, the bot is now a two part deployment:
 1. The "ingester", which gathers data from tfchain and populates it into an SQLite database
 2. The bot itself, which depends on the presence of a database created by the ingester
 
-*Note that the function of the ingester is only needed for the feature of the bot that reports on farmerbot violations. However, there's no option to disable this feature and the bot will not run without a compatible database file. Running the ingester is not strictly required to use other features of the bot, but starting it once is necessary to create a database file.*
+*Note that the function of the ingester is only needed for the feature of the bot that reports on farmerbot violations. However, there's no option to disable this feature, so a bot with no ingester will simply never report any violations.*
 
 #### Ingester
 
