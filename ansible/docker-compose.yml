@@ -1,0 +1,7 @@
+services:
+   node1:
+     image: threefolddev/ubuntu24.04
+   node2:
+     image: threefolddev/ubuntu24.04
+   node3:
+     image: threefolddev/ubuntu24.04

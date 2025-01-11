@@ -33,6 +33,7 @@ NETWORKS = ["main", "test", "dev"]
 DEFAULT_PING_TIMEOUT = 10
 DEFAULT_HEARTBEAT_INTERVAL = 30
 JITTER_TIME = 5
+DB_RETRY_WAIT = 5
 BOOT_TOLERANCE = 60 * 40
 
 
@@ -807,6 +808,25 @@ def violations(update: Update, context: CallbackContext):
         else:
             send_message(context, chat_id, text="No violations found")
 
+def heartbeat_job(context: CallbackContext):
+    leader_info = get_leader(context.bot_data["db"])
+
+    if not leader_info or not is_leader_valid(leader_info):
+        # Leader is invalid, try to become leader
+        if not update_leader(context.bot_data["db"]):
+            logging.error("Failed to update leader, shutting down")
+            os._exit(1)
+        return
+
+    current_leader_id = leader_info.split(":")[0]
+    if current_leader_id != args.node_id:
+        logging.info(f"Another node ({current_leader_id}) is now leader, shutting down")
+        os._exit(0)
+
+    # Update our heartbeat
+    if not update_leader(context.bot_data["db"]):
+        logging.error("Failed to update heartbeat, shutting down")
+        os._exit(1)
 
 parser = argparse.ArgumentParser()
 parser.add_argument("token", help="Specify a bot token")
@@ -876,6 +896,41 @@ dispatcher.add_handler(CommandHandler("unsubscribe", unsubscribe))
 dispatcher.add_handler(CommandHandler("unsub", unsubscribe))
 dispatcher.add_handler(CommandHandler("violations", violations))
 
+if args.test:
+    import json
+
+    get_nodes = get_nodes_from_file
+
+initialize_dbs(dispatcher.bot_data)
+
+while True:
+    try:
+        db = dispatcher.bot_data["db"]
+        break
+    except ConnectionRefusedError:
+        time.sleep(DB_RETRY_WAIT)
+
+# Add random jitter before proceeding with leader logic. If all nodes start
+# simultaneously, they might all try setting themselves as the leader and
+# proceeding to connect to Telegram. While eventually one will prevail, that
+# takes a couple of heartbeat intervals
+initial_jitter = random.uniform(0, JITTER_TIME)
+time.sleep(initial_jitter)
+
+while True:
+    leader_info = get_leader(db)
+
+    if not leader_info or not is_leader_valid(leader_info):
+        # Try to become leader
+        if update_leader(db):
+            break
+
+    # Wait and check again
+    time.sleep(args.heartbeat_interval)
+
+# We're now the leader
+logging.info(f"Node {args.node_id} is now the leader")
+
 updater.bot.delete_my_commands()
 updater.bot.set_my_commands(
     [
@@ -899,58 +954,6 @@ updater.bot.set_my_commands(
         ("network", 'Change the network to "dev", "test", or "main"'),
     ]
 )
-
-if args.test:
-    import json
-
-    get_nodes = get_nodes_from_file
-
-
-def heartbeat_job(context: CallbackContext):
-    leader_info = get_leader(context.bot_data["db"])
-
-    if not leader_info or not is_leader_valid(leader_info):
-        # Leader is invalid, try to become leader
-        if not update_leader(context.bot_data["db"]):
-            logging.error("Failed to update leader, shutting down")
-            os._exit(1)
-        return
-
-    current_leader_id = leader_info.split(":")[0]
-    if current_leader_id != args.node_id:
-        logging.info(f"Another node ({current_leader_id}) is now leader, shutting down")
-        os._exit(0)
-
-    # Update our heartbeat
-    if not update_leader(context.bot_data["db"]):
-        logging.error("Failed to update heartbeat, shutting down")
-        os._exit(1)
-
-
-initialize_dbs(dispatcher.bot_data)
-
-db = dispatcher.bot_data["db"]
-
-# Add random jitter before proceeding with leader logic. If all nodes start
-# simultaneously, they might all try setting themselves as the leader and
-# proceeding to connect to Telegram. While eventually one will prevail, that
-# takes a couple of heartbeat intervals
-initial_jitter = random.uniform(0, JITTER_TIME)
-time.sleep(initial_jitter)
-
-while True:
-    leader_info = get_leader(db)
-
-    if not leader_info or not is_leader_valid(leader_info):
-        # Try to become leader
-        if update_leader(db):
-            break
-
-    # Wait and check again
-    time.sleep(args.heartbeat_interval)
-
-# We're now the leader
-logging.info(f"Node {args.node_id} is now the leader")
 
 populate_violations(dispatcher.bot_data)
 updater.job_queue.run_repeating(check_job, interval=args.poll, first=1)
