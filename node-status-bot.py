@@ -808,6 +808,7 @@ def violations(update: Update, context: CallbackContext):
         else:
             send_message(context, chat_id, text="No violations found")
 
+
 def heartbeat_job(context: CallbackContext):
     leader_info = get_leader(context.bot_data["db"])
 
@@ -827,6 +828,7 @@ def heartbeat_job(context: CallbackContext):
     if not update_leader(context.bot_data["db"]):
         logging.error("Failed to update heartbeat, shutting down")
         os._exit(1)
+
 
 parser = argparse.ArgumentParser()
 parser.add_argument("token", help="Specify a bot token")
