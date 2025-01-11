@@ -8,6 +8,7 @@
     zinit_services_dir: "/etc/zinit"
     git_repo: "https://github.com/threefoldfoundation/node-status-bot.git"
     git_ref: "main" # Can be commit hash, tag, or branch name
+    bot_token: "{{ bot_token | mandatory('bot_token must be specified!') }}"
 
   tasks:
     - name: Ensure system dependencies are installed
