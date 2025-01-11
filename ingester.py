@@ -17,6 +17,7 @@ from websocket._exceptions import (
 )
 import prometheus_client
 from grid3 import tfchain
+from grid3.minting.period import Period
 
 MIN_WORKERS = 2
 SLEEP_TIME = 30
