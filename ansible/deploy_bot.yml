@@ -57,7 +57,7 @@
       copy:
         dest: "{{ zinit_services_dir }}/node-status-bot.yaml"
         content: |
-          exec: {{ bot_venv_dir }}/bin/python {{ bot_install_dir }}/node-status-bot.py
+          exec: {{ bot_venv_dir }}/bin/python {{ bot_install_dir }}/node-status-bot.py {{ bot_token }} --rqlite-host localhost --rqlite-port 4001
           log: /var/log/node-status-bot.log
           env:
             PYTHONUNBUFFERED: 1
