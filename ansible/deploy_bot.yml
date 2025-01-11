@@ -65,12 +65,12 @@
         group: root
         mode: "0644"
 
-    - name: Check if service is already monitored
-      command: zinit status node-status-bot
-      register: service_status
+    - name: Try to monitor service (will fail if already monitored)
+      command: zinit monitor node-status-bot
+      register: monitor_result
       ignore_errors: yes
-      changed_when: false
-    - name: Start or restart service based on current state
-      command: >
-        {{ 'zinit restart node-status-bot' if 'running' in service_status.stdoutelse 'zinit monitor node-status-bot' }}
-      when: service_status is not failed or service_status.rc != 0
+      changed_when: monitor_result.rc == 0
+
+    - name: Restart service if it's already monitored
+      command: zinit restart node-status-bot
+      when: monitor_result.rc != 0
