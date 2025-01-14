@@ -46,10 +46,10 @@
         content: |
           exec: {{ rqlite_install_dir }}/rqlited
             -node-id {{ node_id }}
-            -http-addr {{ inventory_hostname }}:4001
-            -raft-addr {{ inventory_hostname }}:4002
+            -http-addr {{ service_hostname }}:4001
+            -raft-addr {{ service_hostname }}:4002
             -bootstrap-expect 3
-            -join {{ cluster_nodes | map('regex_replace', '$', ':4002') | join(',') }}
+            -join {{ cluster_nodes | map('regex_replace', '^', service_hostname + ':4002') | join(',') }}
             {{ rqlite_install_dir }}/node
         owner: root
         group: root
