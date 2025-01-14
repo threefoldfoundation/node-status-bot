@@ -8,6 +8,7 @@
     zinit_services_dir: "/etc/zinit"
     cluster_nodes: "{{ groups['all'] }}"  # List of all hosts in the inventory
     node_id: "{{ play_hosts.index(inventory_hostname) + 1 }}"
+    service_hostname: "{{ inventory_hostname }}"
 
   tasks:
     - name: Ensure installation directory exists

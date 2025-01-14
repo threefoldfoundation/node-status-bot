@@ -9,6 +9,7 @@
     git_repo: "https://github.com/threefoldfoundation/node-status-bot.git"
     git_ref: "main" # Can be commit hash, tag, or branch name
     bot_token: "{{ bot_token | mandatory('bot_token must be specified!') }}"
+    service_hostname: "{{ inventory_hostname }}"
 
   tasks:
     - name: Ensure system dependencies are installed
@@ -58,7 +59,7 @@
       copy:
         dest: "{{ zinit_services_dir }}/node-status-bot.yaml"
         content: |
-          exec: {{ bot_venv_dir }}/bin/python {{ bot_install_dir }}/node-status-bot.py {{ bot_token }} --rqlite-host {{ inventory_hostname }} --rqlite-port 4001
+          exec: {{ bot_venv_dir }}/bin/python {{ bot_install_dir }}/node-status-bot.py {{ bot_token }} --rqlite-host {{ service_hostname }} --rqlite-port 4001
           env:
             PYTHONUNBUFFERED: 1
         owner: root
