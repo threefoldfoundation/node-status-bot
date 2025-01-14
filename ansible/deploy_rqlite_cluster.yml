@@ -6,7 +6,7 @@
     rqlite_version: "v8.36.4"
     rqlite_install_dir: "/opt/rqlite"
     zinit_services_dir: "/etc/zinit"
-    cluster_nodes: "{{ groups['all'] }}"  # List of all hosts in the inventory
+    cluster_nodes: "{{ groups['all'] }}" # List of all hosts in the inventory
     node_id: "{{ play_hosts.index(inventory_hostname) + 1 }}"
 
   tasks:
@@ -16,13 +16,13 @@
         state: directory
         owner: root
         group: root
-        mode: '0755'
+        mode: "0755"
 
     - name: Download rqlite binary
       get_url:
         url: "https://github.com/rqlite/rqlite/releases/download/{{ rqlite_version }}/rqlite-{{ rqlite_version }}-linux-amd64.tar.gz"
         dest: "/tmp/rqlite-{{ rqlite_version }}-linux-amd64.tar.gz"
-        mode: '0644'
+        mode: "0644"
 
     - name: Extract rqlite binary
       unarchive:
@@ -37,7 +37,7 @@
         state: directory
         owner: root
         group: root
-        mode: '0755'
+        mode: "0755"
 
     - name: Create zinit service file for rqlite
       copy:
@@ -48,11 +48,11 @@
             -http-addr {{ service_host }}:4001
             -raft-addr {{ service_host }}:4002
             -bootstrap-expect 3
-            -join {{ cluster_nodes | map('regex_replace', '^', service_host + ':4002') | join(',') }}
+            -join {{ ansible_play_hosts | map('extract', hostvars, ['service_host']) | map('regex_replace', '$', ':4002') | join(',') }}
             {{ rqlite_install_dir }}/node
         owner: root
         group: root
-        mode: '0644'
+        mode: "0644"
 
     - name: Start rqlite service with zinit
       command: zinit monitor rqlite
