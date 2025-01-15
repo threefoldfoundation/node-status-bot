@@ -1,10 +1,11 @@
-<h1> Deploy with Ansible </h1>
+<h1> Deploy with Ansible and Docker</h1>
 
 <h2>Table of Contents</h2>
 
 - [Introduction](#introduction)
 - [Prerequisites](#prerequisites)
 - [Deployment Steps](#deployment-steps)
+- [Clean Up](#clean-up)
 - [Notes on Docker](#notes-on-docker)
 
 ---
@@ -55,6 +56,14 @@ ansible-playbook -i docker.ini deploy_bot.yml -e "bot_token=mytoken git_ref=main
 ```
 
 The bot token is mandatory and must be supplied. The `git_ref` is an optional tag, branch, or commit hash to use, with the default being the main branch.
+
+## Clean Up
+
+To stop the node status bot simply run:
+
+```
+docker compose down
+```
 
 ## Notes on Docker
 
