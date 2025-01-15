@@ -3,8 +3,8 @@ This folder contains Ansible playbooks for deploying Rqlite and the bot into sys
 Assuming you have an `inventory.ini` file with an inventory for your hosts, you can run the playbooks like so:
 
 ```
-ansible-playbook -i docker.ini deploy_rqlite_cluster.yml
-ansible-playbook -i docker.ini deploy_bot.yml -e "bot_token=mytoken git_ref=mybranch"
+ansible-playbook -i docker.ini deploy_rqlite_cluster.yaml
+ansible-playbook -i docker.ini deploy_bot.yaml -e "bot_token=mytoken git_ref=mybranch"
 ```
 
 Bot token is mandatory and must be supplied. The `git_ref` is an optional tag, branch, or commit hash to use, with the default being the main branch.
