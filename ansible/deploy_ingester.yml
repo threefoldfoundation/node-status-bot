@@ -1,0 +1,67 @@
+---
+- name: Deploy ingester
+  hosts: all
+  become: yes
+  vars:
+    ingester_install_dir: "/opt/ingester"
+    ingester_venv_dir: "{{ ingester_install_dir }}/venv"
+    zinit_services_dir: "/etc/zinit"
+    git_repo: "https://github.com/threefoldfoundation/node-status-bot.git"
+    git_ref: "main" # Can be commit hash, tag, or branch name
+
+  tasks:
+    - name: Ensure system dependencies are installed
+      apt:
+        name:
+          - python3-venv
+          - python3-pip
+          - build-essential
+          - git
+        state: present
+        update_cache: yes
+
+    - name: Clone repository and checkout specific ref
+      git:
+        repo: "{{ git_repo }}"
+        dest: "{{ ingester_install_dir }}"
+        version: "{{ git_ref }}"
+        force: yes
+        update: yes
+        depth: 0
+
+    - name: Create Python virtual environment
+      ansible.builtin.pip:
+        name:
+          - pip
+          - setuptools
+          - wheel
+        virtualenv: "{{ ingester_venv_dir }}"
+        virtualenv_command: python3 -m venv
+        state: present
+
+    - name: Install Python dependencies
+      ansible.builtin.pip:
+        requirements: "{{ ingester_install_dir }}/requirements.txt"
+        virtualenv: "{{ ingester_venv_dir }}"
+        state: present
+
+    - name: Create zinit service file for ingester
+      copy:
+        dest: "{{ zinit_services_dir }}/ingester.yaml"
+        content: |
+          exec: {{ ingester_venv_dir }}/bin/python {{ ingester_install_dir }}/ingester.py -f /opt/tfchain.db --max-workers 5
+          env:
+            PYTHONUNBUFFERED: 1
+        owner: root
+        group: root
+        mode: "0644"
+
+    - name: Try to monitor service (will fail if already monitored)
+      command: zinit monitor ingester
+      register: monitor_result
+      ignore_errors: yes
+      changed_when: monitor_result.rc == 0
+
+    - name: Restart service if it's already monitored
+      command: zinit stop ingester && zinit start ingester
+      when: monitor_result.rc != 0
