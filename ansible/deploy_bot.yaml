@@ -58,19 +58,15 @@
       copy:
         dest: "{{ zinit_services_dir }}/node-status-bot.yaml"
         content: |
-          exec: {{ bot_venv_dir }}/bin/python {{ bot_install_dir }}/node-status-bot.py {{ bot_token }} --rqlite-host {{ service_host }} --rqlite-port 4001
+          exec: {{ bot_venv_dir }}/bin/python {{ bot_install_dir }}/node-status-bot.py {{ bot_token }} --rqlite-host {{ service_host }} --rqlite-port 4001 -f /opt/tfchain.db
           env:
             PYTHONUNBUFFERED: 1
         owner: root
         group: root
         mode: "0644"
 
-    - name: Try to monitor service (will fail if already monitored)
-      command: zinit monitor node-status-bot
-      register: monitor_result
-      ignore_errors: yes
-      changed_when: monitor_result.rc == 0
-
-    - name: Restart service if it's already monitored
-      command: zinit stop node-status-bot && zinit stop node-status-bot
-      when: monitor_result.rc != 0
+    # This starts or restarts as needed, so works for updates
+    - name: Restart bot
+      local.zinit.service:
+        name: node-status-bot
+        state: restarted

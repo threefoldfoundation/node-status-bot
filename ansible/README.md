@@ -1,5 +1,11 @@
 This folder contains Ansible playbooks for deploying Rqlite and the bot into systems using Zinit as a process manager (such as micro VMs running on the ThreeFold Grid).
 
+These playbooks require an Ansible module for Zinit. Install it like this:
+
+```
+ansible-galaxy collection install git+https://github.com/scottyeager/ansible-zinit.git
+```
+
 Assuming you have an `inventory.ini` file with an inventory for your hosts, you can run the playbooks like so:
 
 ```

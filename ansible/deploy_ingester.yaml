@@ -56,12 +56,8 @@
         group: root
         mode: "0644"
 
-    - name: Try to monitor service (will fail if already monitored)
-      command: zinit monitor ingester
-      register: monitor_result
-      ignore_errors: yes
-      changed_when: monitor_result.rc == 0
-
-    - name: Restart service if it's already monitored
-      command: zinit stop ingester && zinit start ingester
-      when: monitor_result.rc != 0
+    # This starts or restarts as needed, so works for updates
+    - name: Restart ingester
+      local.zinit.service:
+        name: ingester
+        state: restarted

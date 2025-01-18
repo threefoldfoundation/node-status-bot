@@ -54,6 +54,8 @@
         group: root
         mode: "0644"
 
-    - name: Start rqlite service with zinit
-      command: zinit monitor rqlite
-      changed_when: false
+    # This starts or restarts as needed, so works for updates
+    - name: Restart rqlite
+      local.zinit.service:
+        name: rqlite
+        state: restarted
