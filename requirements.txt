@@ -3,7 +3,6 @@ backoff==2.2.1
 base58==2.1.1
 cachetools==4.2.2
 certifi==2023.7.22
-cffi==1.16.0
 charset-normalizer==3.3.2
 cytoolz==0.12.3
 ecdsa==0.18.0
@@ -40,4 +39,3 @@ tzlocal==5.2
 urllib3==1.26.18
 websocket-client==1.7.0
 xxhash==3.4.1
-yarl==1.9.2

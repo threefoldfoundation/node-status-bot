@@ -1,0 +1,40 @@
+---
+- name: Install sqlite3_rsync
+  hosts: all
+  become: yes
+
+  tasks:
+    - name: Create temporary directory
+      tempfile:
+        state: directory
+        suffix: sqlite
+      register: tmp_dir
+
+    - name: Install unzip
+      apt:
+        name: unzip
+        state: present
+        update_cache: yes
+
+    - name: Download sqlite tools
+      get_url:
+        url: https://sqlite.org/2025/sqlite-tools-linux-x64-3480000.zip
+        dest: "{{ tmp_dir.path }}/sqlite-tools.zip"
+
+    - name: Unzip sqlite tools
+      unarchive:
+        src: "{{ tmp_dir.path }}/sqlite-tools.zip"
+        dest: "{{ tmp_dir.path }}"
+        remote_src: yes
+
+    - name: Install sqlite3_rsync
+      copy:
+        src: "{{ tmp_dir.path }}/sqlite3_rsync"
+        dest: /usr/local/bin/sqlite3_rsync
+        mode: "0755"
+        remote_src: yes
+
+    - name: Clean up temporary directory
+      file:
+        path: "{{ tmp_dir.path }}"
+        state: absent

@@ -15,6 +15,75 @@ ansible-playbook -i docker.ini deploy_bot.yaml -e "bot_token=mytoken git_ref=myb
 
 Bot token is mandatory and must be supplied. The `git_ref` is an optional tag, branch, or commit hash to use, with the default being the main branch.
 
+## Ingester bootstrap
+
+Since gathering historic data with the ingester is rather time consuming and resource intensive, it's nice to bootstrap from an existing database file. The `bootstrap_ingester` playbook provides two ways to do this:
+
+1. Copy a local database file to a remote machine (local file should not have any open database connections)
+2. Live sync the database from another node in the cluster using `sqlite3_rsync`
+
+### Bootstrap strategy
+
+When bringing a new cluster live, we might want to seed it with a database file on our local machine, such as a backup taken from another cluster. Rather than upload to all cluster machines from our local machine, we might prefer to:
+
+1. Upload to one cluster machine
+2. Sync from the first cluster machine to the others
+
+Also, when replacing one member of a cluster, it makes sense to sync to the new machine from one of the existing cluster members.
+
+To achieve these strategies, we can use limits when calling Ansible, so apply playbooks to a subset of hosts in the inventory. How to use limits will be demonstrated in the examples below.
+
+### Local DB file
+
+The local file option is triggered by passing a `local_db_path` to the playbook. Here we copy our local database file to a single host in the cluster, `host1`:
+
+```
+ansible-playbook -i inventory.ini bootstrap_ingester.yaml -e "local_db_path=./tfchain.db" --limit host1
+```
+
+Unfortunately, Ansible doesn't seem to have a way to display progress on file transfers. Just using a tool like `scp` or `rsync` directly might make more sense, especially when only copying to a single host.
+
+### sqlite3_rsync
+
+The SQLite project now provides a tool called `sqlite3_rsync` for syncing two database files with the following features:
+
+* Can work over `ssh` to sync with a remote machine
+* One or both database files can be actively in use
+
+This makes it a nice option for bootstrapping between nodes in the custer, even if the source database has an active ingester writing data to it.
+
+#### Agent forwarding
+
+In order to use this feature, there must be SSH connectivity between the two machines involved. Since generally cluster machines won't have indepent SSH access to each other, agent forwarding is enabled in this playbook to allow using the local machine's SSH keys to authorize between two cluster machines.
+
+To use agent forwarding, you will need to make sure the agent is started and your SSH key is added:
+
+```
+ssh-add -l
+```
+
+If the agent can't be reached or your key is missing, run these commands:
+
+```
+# For bash:
+eval $(ssh-agent -s)
+
+# For fish:
+# eval (ssh-agent -c)
+
+ssh-add ~/.ssh/id_rsa.pub # Or replace with path to your public key
+```
+
+#### Example
+
+Here's an example of syncing within the cluster, by specifying an `origin_path` with the internal WireGuard IP of `host1`. Combined with the example above, this completes seeding all machines in a three host cluster with the database file originating on our local machine:
+
+```
+ansible-playbook -i inventory.ini bootstrap_ingester.yaml -e "origin_path=root@10.1.3.2:/opt/tfchain.db --limit host2,host3
+```
+
+By limiting to a single host, this form could also be used to bootstrap a new cluster member from the database of another member with an actively running ingester.
+
 ## Docker
 
 There is a Docker Compose file provided for the purpose of testing the Ansible playbooks. As an advantage of using micro VMs which are also based on Docker images, we can use the same image for these tests. While connecting via SSH to the containers would be possible, it's easier to use the Ansible Docker connector, as shown in the `docker.ini` file.

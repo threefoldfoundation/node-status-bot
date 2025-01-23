@@ -1,0 +1,42 @@
+---
+- name: Bootstrap ingester database
+  hosts: all
+  become: yes
+  vars:
+    ansible_ssh_extra_args: "-o ForwardAgent=yes"
+    origin_path: "{{ origin_path | default(omit) }}"
+    replica_path: "/opt/tfchain.db"
+
+  tasks:
+    - name: Ensure replica directory exists
+      file:
+        path: /opt
+        state: directory
+        mode: "0755"
+
+    - name: Bootstrap from local database file
+      copy:
+        src: "{{ local_db_path }}"
+        dest: "{{ replica_path }}"
+        mode: "0644"
+        remote_src: no
+      when: local_db_path is defined
+      register: local_bootstrap_result
+
+    - name: Bootstrap database from origin
+      when: local_db_path is not defined
+      command: >
+        sqlite3_rsync {{ origin_path }} {{ replica_path }}
+      args:
+        creates: "{{ replica_path }}"
+      register: bootstrap_result
+
+    - name: Verify bootstrap success
+      stat:
+        path: "{{ replica_path }}"
+      register: db_stat
+
+    - name: Fail if bootstrap failed
+      fail:
+        msg: "Failed to bootstrap database from {{ origin_path }}"
+      when: not db_stat.stat.exists
