@@ -1,4 +1,8 @@
+# Node Status Bot Ansible Playbooks
+
 This folder contains Ansible playbooks for deploying Rqlite and the bot into systems using Zinit as a process manager (such as micro VMs running on the ThreeFold Grid).
+
+First of all you will of course need Ansible. Check the [offical docs](https://docs.ansible.com/ansible/latest/installation_guide/index.html) for installation instructions.
 
 These playbooks require an Ansible module for Zinit. Install it like this:
 
@@ -84,8 +88,6 @@ ansible-playbook -i inventory.ini bootstrap_ingester.yaml -e "origin_path=root@1
 
 By limiting to a single host, this form could also be used to bootstrap a new cluster member from the database of another member with an actively running ingester.
 
-## Docker
+## Development
 
-There is a Docker Compose file provided for the purpose of testing the Ansible playbooks. As an advantage of using micro VMs which are also based on Docker images, we can use the same image for these tests. While connecting via SSH to the containers would be possible, it's easier to use the Ansible Docker connector, as shown in the `docker.ini` file.
-
-For testing the clustering features in a more efficient way, see the Docker Compose file in the `docker` directory.
+If you want to hack on the playbooks themselves, there's a Docker Compose file under `docker_cluster` to bring up a local cluster for rapid testing. These are only intended for testing the Ansible based deployment process. To quickly test clusters of the bot without going through the deployment process, use the other Docker Compose file under `docker` in the repo root.
