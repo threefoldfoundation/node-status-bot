@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Generate docker.ini from docker compose ps output
-OUTPUT_FILE="docker.ini"
+OUTPUT_FILE="inventory.ini"
 
 # Write the header
 echo "[docker]" > "$OUTPUT_FILE"

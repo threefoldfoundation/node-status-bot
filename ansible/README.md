@@ -80,7 +80,13 @@ ssh-add ~/.ssh/id_rsa.pub # Or replace with path to your public key
 
 #### Example
 
-Here's an example of syncing within the cluster, by specifying an `origin_path` with the internal WireGuard IP of `host1`. Combined with the example above, this completes seeding all machines in a three host cluster with the database file originating on our local machine:
+Before using `sqlite3_rsync`, it must be installed:
+
+```
+ansible-playbook -i inventory.ini install_sqlite3_rsync.yaml
+```
+
+Here's an example of syncing within the cluster, by specifying an `origin_path` with the internal WireGuard IP of `host1`. Combined with the example above, this completes seeding all machines in a three host cluster with the database file originating on our local machine.
 
 ```
 ansible-playbook -i inventory.ini bootstrap_ingester.yaml -e "origin_path=root@10.1.3.2:/opt/tfchain.db --limit host2,host3
