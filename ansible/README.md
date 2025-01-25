@@ -96,4 +96,4 @@ By limiting to a single host, this form could also be used to bootstrap a new cl
 
 ## Development
 
-If you want to hack on the playbooks themselves, there's a Docker Compose file under `docker_cluster` to bring up a local cluster for rapid testing. These are only intended for testing the Ansible based deployment process. To quickly test clusters of the bot without going through the deployment process, use the other Docker Compose file under `docker` in the repo root.
+If you want to hack on the playbooks themselves, there's a Docker Compose file under `ansible/docker` to bring up a local cluster for rapid testing. These are only intended for testing the Ansible based deployment process. To quickly test clusters of the bot without going through the deployment process, use the other Docker Compose file under `docker` in the repo root.
