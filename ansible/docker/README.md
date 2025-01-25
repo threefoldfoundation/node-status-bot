@@ -7,7 +7,7 @@ There are two options for connecting to the containers with Ansible:
 1. SSH (best compatibility but requires authorized_keys file)
 2. Docker connection (slightly limited compatibility)
 
-The Docker connection won't work with feature of the `bootstrap_ingester` playbook that uses SSH to sync between two cluster machines. All other playbooks are supported. You also need Ansible version 2.15.0 or higher.
+The Docker connection won't work with feature of the `bootstrap_ingester` playbook that uses SSH to sync between two cluster machines. All other playbooks are supported. You also need Ansible version `2.15.0` or higher to use the Docker connection.
 
 ## SSH
 
