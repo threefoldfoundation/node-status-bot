@@ -85,14 +85,14 @@ def check_job(context: CallbackContext):
                 if node.nodeId in all_violations:
                     violations = all_violations[node.nodeId]
                     for v in violations:
-                        if v.boot_requested not in node.violations: 
+                        if v.boot_requested not in node.violations:
                             if v.finalized:
                                 for chat_id in subbed_nodes[node.nodeId]:
                                     send_message(context, chat_id, text='🚨 Farmerbot violation detected for node {}. Node failed to boot within 30 minutes 🚨\n\n{}'.format(node.nodeId, format_violation(v)))
-                            elif v.end_time - v.boot_requested > BOOT_TOLERANCE:
+                            else:
                                 for chat_id in subbed_nodes[node.nodeId]:
-                                    send_message(context, chat_id, text='🚨 Probable farmerbot violation detected for node {}. Node appears to have not booted within 30 minutes of boot request. Check again with /violations after node boots 🚨\n\n{}'.format(node.nodeId, format_violation(v)))
-                        
+                                    send_message(context, chat_id, text='🚨 Possible farmerbot violation detected for node {}. Node appears to have not booted within 30 minutes of boot request. Check again with /violations after node boots 🚨\n\n{}'.format(node.nodeId, format_violation(v)))
+
                         # We do this every time because information about when a node finally booted might become available later. Right now we don't use this info though. Might be effective as a cache for manual violation lookups
                         node.violations[v.boot_requested] = v
 
@@ -184,14 +184,14 @@ def get_nodes(net, node_ids):
     Query a list of node ids in GraphQL, create Node objects for consistency and easy field access, then assign them a status and return them.
     """
     graphql = graphqls[net]
-    nodes = graphql.nodes(['nodeID', 'twinID', 'updatedAt', 'power'], 
+    nodes = graphql.nodes(['nodeID', 'twinID', 'updatedAt', 'power'],
                           nodeID_in=node_ids)
     nodes = [Node(node) for node in nodes]
 
     one_hour_ago = time.time() - 60 * 60
 
     for node in nodes:
-        if node.power is None: 
+        if node.power is None:
             node.power = {'state': None, 'target': None}
         node.status = get_node_status(node)
 
@@ -298,7 +298,7 @@ def populate_violations(bot_data):
     nodes = bot_data['nodes']['main']
 
     con, periods = get_con_and_periods()
-    
+
     for node_id, node in nodes.items():
         violations = get_violations(con, node_id, periods)
         # Violations are uniquely identified per node by their first field (time that wake up was initiated). Storing them in this form helps to easily identify new violations later
@@ -349,11 +349,11 @@ def start(update: Update, context: CallbackContext):
     chat_id = update.effective_chat.id
     context.bot_data['chats'].setdefault(chat_id, new_user())
     msg = '''
-Hey there, 
+Hey there,
 
 I'm the ThreeFold node status bot. Beep boop.
 
-I can give you information about whether a node is up or down right now (/status) and also notify you if its state changes in the future (/subscribe). 
+I can give you information about whether a node is up or down right now (/status) and also notify you if its state changes in the future (/subscribe).
 
 Here are all the commands I support:
 
@@ -364,12 +364,12 @@ Example: /status 1
 
 /violations - scan for farmerbot related violations during the current minting period. Like status, this works on all subscribed nodes when no input is given.
 
-/subscribe - subscribe to updates about one or more nodes. If you don't provide an input, the nodes you are currently subscribed to will be shown. 
+/subscribe - subscribe to updates about one or more nodes. If you don't provide an input, the nodes you are currently subscribed to will be shown.
 Example: /sub 1 2 3
 
 /unsubscribe - unsubscribe from updates about one or more nodes. To unsubscribe from all node and thus stop all alerts, write "/unsubscribe all"
 
-/network - change the network to "dev", "test", or "main" (default is main). If you don't provide an input, the currently selected network is shown. 
+/network - change the network to "dev", "test", or "main" (default is main). If you don't provide an input, the currently selected network is shown.
 Example: /network main
 
 To report bugs, request features, or just say hi, please contact @scottyeager. Please also subscribe to the updates channel here for news on the bot: t.me/node_bot_updates
@@ -383,7 +383,7 @@ This bot is developed and operated on a best effort basis. Only you are responsi
 def status_gql(update: Update, context: CallbackContext):
     chat_id = update.effective_chat.id
     user = context.bot_data['chats'].setdefault(chat_id, new_user())
-        
+
     net = user['net']
 
     if context.args:
@@ -448,7 +448,7 @@ def subscribe(update: Update, context: CallbackContext):
         else:
             send_message(context, chat_id, text='You are not subscribed to any nodes')
             return
-    
+
     try:
         new_ids = [n for n in node_ids if n not in subbed_nodes]
         new_nodes = {node.nodeId: node for node in get_nodes(net, new_ids)}
@@ -462,7 +462,7 @@ def subscribe(update: Update, context: CallbackContext):
                     if node_used_farmerbot(con, node_id):
                         violations = get_violations(con, node_id, periods)
                         new_nodes[node_id].violations = {v.boot_requested: v for v in violations}
-                    
+
             known_nodes.update(new_nodes)
             # Do this to preserve the order since gql does not
             new_subs = [n for n in node_ids if n in new_nodes]
@@ -472,7 +472,7 @@ def subscribe(update: Update, context: CallbackContext):
                 text += ' You are currently subscribed to node' + format_list(subbed_nodes)
             send_message(context, chat_id, text=text)
             return
-    
+
     except:
         logging.exception("Failed to fetch node info")
         send_message(context, chat_id, text='Error fetching node data. Please wait a moment and try again.')
@@ -482,7 +482,7 @@ def subscribe(update: Update, context: CallbackContext):
 
     if subbed_nodes:
         msg += '\n\nYou are now subscribed to node' + format_list(subbed_nodes + new_subs)
-    
+
     subbed_nodes.extend(new_subs)
     send_message(context, chat_id, text=msg)
 
@@ -592,14 +592,14 @@ def violations(update: Update, context: CallbackContext):
 
 parser = argparse.ArgumentParser()
 parser.add_argument('token', help='Specify a bot token')
-parser.add_argument('-v', '--verbose', help='Verbose output', 
+parser.add_argument('-v', '--verbose', help='Verbose output',
                     action="store_true")
-parser.add_argument('-p', '--poll', help='Set polling frequency in seconds', 
+parser.add_argument('-p', '--poll', help='Set polling frequency in seconds',
                     type=int, default=60)
-parser.add_argument('-t', '--test', help='Enable test feature', 
+parser.add_argument('-t', '--test', help='Enable test feature',
                     action="store_true")
 parser.add_argument('-d', '--dump', help='Dump bot data', action="store_true")
-parser.add_argument('-f', '--db_file', 
+parser.add_argument('-f', '--db_file',
                     help='Specify file for sqlite db', type=str, default='tfchain.db')
 args = parser.parse_args()
 
@@ -628,7 +628,7 @@ else:
     log_level = logging.WARNING
 
 logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=log_level, 
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=log_level,
     handlers=[logging.FileHandler('logs'), logging.StreamHandler()])
 
 # Anyone commands
@@ -647,8 +647,8 @@ dispatcher.add_handler(CommandHandler('unsub', unsubscribe))
 dispatcher.add_handler(CommandHandler('violations', violations))
 
 updater.bot.delete_my_commands()
-updater.bot.set_my_commands([   
-    ('help', 'Show more details on commands and example usage.'), 
+updater.bot.set_my_commands([
+    ('help', 'Show more details on commands and example usage.'),
     ('status', 'Get current status of nodes. With no input, show status for all subscribed nodes.'),
     ('violations', 'Check if node has any farmerbot violations. With no input, shows a report for subscribed nodes.'),
     ('subscribe', 'Start alerts for one or more nodes. With no input, shows currently subscribed nodes.'),
