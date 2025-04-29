@@ -158,15 +158,17 @@ def check_job(context: CallbackContext):
                                             update.nodeId, format_violation(violation)
                                         ),
                                     )
-                            elif (
-                                violation.end_time - violation.boot_requested
-                                > BOOT_TOLERANCE
-                            ):
+                            # The idea here was to give a bit of wiggle room before alerting the user, since these are only possible violations at this point. However, if the condition wasn't met when the violation was first detected, then the user was never alerted. To reenable this, we'd need some additional logic here in the bot or in code that finds violations.
+                            # elif (
+                            #     violation.end_time - violation.boot_requested
+                            #     > BOOT_TOLERANCE
+                            # ):
+                            else:
                                 for chat_id in subbed_nodes[update.nodeId]:
                                     send_message(
                                         context,
                                         chat_id,
-                                        text="🚨 Probable farmerbot violation detected for node {}. Node appears to have not booted within 30 minutes of boot request. Check again with /violations after node boots 🚨\n\n{}".format(
+                                        text="🚨 Possible farmerbot violation detected for node {}. Node appears to have not booted within 30 minutes of boot request. Check again with /violations after node boots 🚨\n\n{}".format(
                                             update.nodeId, format_violation(violation)
                                         ),
                                     )
