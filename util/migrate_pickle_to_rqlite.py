@@ -30,19 +30,22 @@ def migrate_nodes(db: RqliteDB, nodes: Dict[str, Dict[int, Any]]) -> None:
     """Migrate node data from pickle to rqlite"""
     for net in ['main', 'test', 'dev']:
         for node_id, node_data in nodes[net].items():
-            # Create node with basic data
-            db.create_node({
+            # Create node with basic data from Node object
+            node_dict = {
                 'nodeId': node_id,
                 'power': node_data.power,
-                'status': node_data.status,
+                'status': getattr(node_data, 'status', 'down'),
                 'updatedAt': node_data.updatedAt,
                 'farmerbot': getattr(node_data, 'farmerbot', False)
-            }, net)
+            }
+            db.create_node(node_dict, net)
 
             # Migrate violations if any
             violations = getattr(node_data, 'violations', {})
             if violations:
-                db.add_violations(node_id, net, list(violations.values()))
+                # Convert dict values to list of Violation objects
+                violation_list = list(violations.values())
+                db.add_violations(node_id, net, violation_list)
 
 def migrate_metadata(db: RqliteDB, bot_data: Dict[str, Any]) -> None:
     """Migrate metadata like violations_populated flag"""
@@ -58,7 +61,13 @@ def main():
 
     # Load pickle data
     with open(args.pickle_file, 'rb') as f:
-        bot_data = pickle.load(f)
+        pickle_data = pickle.load(f)
+
+    # Get the actual bot data from the pickle structure
+    bot_data = pickle_data.get('bot_data', {})
+    if not bot_data:
+        print("Error: No bot_data found in pickle file")
+        return None
 
     # Initialize rqlite connection
     db = RqliteDB(host=args.rqlite_host, port=args.rqlite_port)
