@@ -41,7 +41,7 @@ def migrate_nodes(db: RqliteDB, nodes: Dict[str, Dict[int, Any]]) -> None:
             # Migrate violations if any
             violations = getattr(node_data, 'violations', {})
             if violations:
-                db.add_violations(node_id, net, list(violations.values())
+                db.add_violations(node_id, net, list(violations.values()))
 
 def migrate_metadata(db: RqliteDB, bot_data: Dict[str, Any]) -> None:
     """Migrate metadata like violations_populated flag"""
