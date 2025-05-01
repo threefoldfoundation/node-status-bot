@@ -8,17 +8,18 @@ from db import RqliteDB
 def migrate_chats(db: RqliteDB, chats: Dict[int, Dict[str, Any]]) -> None:
     """Migrate chat data from pickle to rqlite"""
     for chat_id, chat_data in chats.items():
+        print(f"Migrating chat {chat_id}")
         # Create chat record if it doesn't exist
         db.create_chat(chat_id)
-        
+
         # Set network for chat
         net = chat_data.get('net', 'main')
         db.update_chat_network(chat_id, net)
-        
+
         # Set timeout if exists
         if 'timeout' in chat_data:
             db.set_chat_timeout(chat_id, chat_data['timeout'])
-        
+
         # Migrate subscriptions per network
         for net in ['main', 'test', 'dev']:
             node_ids = chat_data['nodes'].get(net, [])
@@ -37,7 +38,7 @@ def migrate_nodes(db: RqliteDB, nodes: Dict[str, Dict[int, Any]]) -> None:
                 'updatedAt': node_data.updatedAt,
                 'farmerbot': getattr(node_data, 'farmerbot', False)
             }, net)
-            
+
             # Migrate violations if any
             violations = getattr(node_data, 'violations', {})
             if violations:
@@ -71,5 +72,7 @@ def main():
 
     print("Migration completed successfully")
 
+    return bot_data
+
 if __name__ == '__main__':
-    main()
+    bot_data = main()
