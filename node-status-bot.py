@@ -885,7 +885,10 @@ else:
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=log_level,
-    handlers=[logging.FileHandler("/var/log/node-status-bot.log"), logging.StreamHandler()],
+    handlers=[
+        logging.FileHandler("/var/log/node-status-bot.log"),
+        logging.StreamHandler(),
+    ],
 )
 
 # Anyone commands
@@ -937,6 +940,9 @@ while True:
 
 # We're now the leader
 logging.info(f"Node {args.node_id} is now the leader")
+# Flush the logs so we can always see leader changes immediately
+for handler in logging.getLogger().handlers:
+    handler.flush()
 
 updater.bot.delete_my_commands()
 updater.bot.set_my_commands(
