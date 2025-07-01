@@ -58,7 +58,7 @@
       copy:
         dest: "{{ zinit_services_dir }}/node-status-bot.yaml"
         content: |
-          exec: {{ bot_venv_dir }}/bin/python {{ bot_install_dir }}/node-status-bot.py {{ bot_token }} --rqlite-host {{ service_host }} --rqlite-port 4001 -f /opt/tfchain.db
+          exec: {{ bot_venv_dir }}/bin/python {{ bot_install_dir }}/node-status-bot.py {{ bot_token }} --verbose --rqlite-host {{ service_host }} --rqlite-port 4001 -f /opt/tfchain.db
           env:
             PYTHONUNBUFFERED: 1
         owner: root
