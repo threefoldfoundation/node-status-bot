@@ -419,6 +419,8 @@ def populate_violations(bot_data):
     if db.get_metadata("violations_populated") == "true":
         return
 
+    logging.info("Populating violations")
+
     con, periods = get_con_and_periods()
 
     # Get all nodes that have ever been in standby (managed by farmerbot)
@@ -829,6 +831,7 @@ def heartbeat_job(context: CallbackContext):
     # Update our heartbeat
     if not update_leader(context.bot_data["db"]):
         logging.error("Failed to update heartbeat, shutting down")
+
         os._exit(1)
 
 
@@ -882,7 +885,7 @@ else:
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=log_level,
-    handlers=[logging.FileHandler("logs"), logging.StreamHandler()],
+    handlers=[logging.FileHandler("/var/log/node-status-bot.log"), logging.StreamHandler()],
 )
 
 # Anyone commands
